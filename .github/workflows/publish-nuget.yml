@@ -1,0 +1,42 @@
+name: Publish NuGet
+
+on:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Build and publish package
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Restore
+        run: dotnet restore HyperVConsoleKit.sln
+
+      - name: Build
+        run: dotnet build HyperVConsoleKit.sln --configuration Release --no-restore
+
+      - name: Pack
+        run: dotnet pack src\HyperVConsoleKit\HyperVConsoleKit.csproj --configuration Release --no-build --output artifacts\packages
+
+      - name: NuGet login
+        uses: NuGet/login@v1
+        id: login
+        with:
+          user: ml6719
+
+      - name: Publish to NuGet
+        run: dotnet nuget push artifacts\packages\*.nupkg --api-key ${{ steps.login.outputs.NUGET_API_KEY }} --source https://api.nuget.org/v3/index.json --skip-duplicate
