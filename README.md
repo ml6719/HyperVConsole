@@ -17,12 +17,18 @@ It is not trying to replace RDP, VMConnect, ScreenConnect, TeamViewer, or a prop
 - Try mouse movement and clicks where Hyper-V exposes a synthetic mouse.
 - Start, stop, and reset VMs.
 - Detect when Enhanced Session is likely available and launch VMConnect.
+- Apply policy limits for FPS, resolution, bandwidth, color depth, power control, and input.
+- Emit audit events for capture, input, session, and VM power actions.
+- Run structured diagnostics that can be uploaded by an agent.
+- Fan out one capture loop to multiple viewers while slow viewers drop stale frames.
 
 The core library targets:
 
 ```xml
-<TargetFrameworks>net46;net8.0-windows</TargetFrameworks>
+<TargetFrameworks>net46;netstandard2.0;net8.0-windows</TargetFrameworks>
 ```
+
+That means it is compatible with modern .NET on Windows, including .NET Core/.NET services that can consume `netstandard2.0`, plus .NET 8 Windows apps and services. It is not cross-platform .NET because Hyper-V console capture and input are Windows-only WMI APIs.
 
 ## How It Works
 
@@ -79,6 +85,75 @@ foreach (var vm in client.GetVirtualMachines())
     Console.WriteLine($"{vm.Name} - {vm.Id} - {vm.State}");
 }
 ```
+
+## Agent Policy
+
+If you are embedding this in an MSP agent, set policy at the client or session boundary. This keeps your service from accidentally opening an unlimited, full-resolution, full-input remote console.
+
+```csharp
+using HyperVConsoleKit;
+
+var policy = new HyperVConsolePolicy
+{
+    MaxWidth = 1024,
+    MaxHeight = 768,
+    MaxFramesPerSecond = 5,
+    MaxBytesPerSecond = 500_000,
+    MaxColorDepth = ConsoleFramePixelFormat.Rgb332,
+    MaxConcurrentViewers = 3,
+    AllowKeyboardInput = true,
+    AllowMouseInput = true,
+    AllowPowerControl = false
+};
+
+var client = new HyperVConsoleClient(policy);
+```
+
+You can also override policy for a single session:
+
+```csharp
+using var session = client.OpenConsole(vm.Id, new HyperVConsoleOpenOptions
+{
+    Mode = HyperVConsoleMode.RawHostConsole,
+    Policy = policy
+});
+```
+
+## Audit Events
+
+Hook audit events if you need an activity trail for technician sessions.
+
+```csharp
+client.Activity += (_, e) =>
+{
+    Console.WriteLine($"{e.TimestampUtc:o} {e.UserName} {e.VirtualMachineId} {e.Action} {e.Success} {e.Message}");
+};
+
+using var session = client.OpenConsole(vm.Id);
+session.Activity += (_, e) =>
+{
+    Console.WriteLine($"{e.Action}: {e.Message}");
+};
+
+session.SendCtrlAltDel();
+```
+
+## Structured Diagnostics
+
+Use diagnostics when an agent needs to explain why the console is not usable.
+
+```csharp
+var report = client.RunDiagnostics(vm.Id);
+
+Console.WriteLine(report.OverallStatus);
+
+foreach (var item in report.Items)
+{
+    Console.WriteLine($"{item.Status}: {item.Name} - {item.Message}");
+}
+```
+
+This is deliberately JSON-friendly, so you can return it from an API endpoint or upload it with your agent telemetry.
 
 Open a console session:
 
@@ -267,7 +342,7 @@ await session.StreamFramesAsync(
     cts.Token);
 ```
 
-Your callback is awaited. If your transport is slow, HyperVConsoleKit will not queue up stale frames behind it.
+Your callback is awaited. If `DropFramesWhenBehind` is `true`, HyperVConsoleKit uses latest-frame streaming internally: capture can keep moving while your sender is busy, and the sender receives the newest available frame instead of working through stale frames.
 
 Placeholder methods from the example:
 
@@ -283,6 +358,25 @@ static Task SendChangedTilesToYourClient(ConsoleFrame frame, CancellationToken c
     // Send frame.Tiles. Each tile has X, Y, Width, Height, and RawBytes.
     return Task.CompletedTask;
 }
+```
+
+For several viewers, use a frame hub so the VM is captured once and each viewer has its own latest-frame queue:
+
+```csharp
+using var session = client.OpenConsole(vm.Id);
+
+var options = ConsoleFrameStreamOptions.CreatePreset(ConsoleStreamPreset.Balanced);
+options.DropFramesWhenBehind = true;
+
+var hub = new HyperVConsoleFrameHub(session, options, maxViewers: 3);
+using var hubCts = new CancellationTokenSource();
+
+var hubTask = hub.RunAsync(hubCts.Token);
+
+var viewerTask = hub.AddViewerAsync(async (frame, cancellationToken) =>
+{
+    await SendFullFrameToYourClient(frame, cancellationToken);
+}, requestAborted);
 ```
 
 ## Streaming Presets
@@ -385,6 +479,14 @@ session.SendKeyUp(ConsoleKeyCode.Shift);
 ```csharp
 session.SendChord(ConsoleKeyCode.Alt, ConsoleKeyCode.Tab);
 session.SendChord(ConsoleKeyCode.Control, ConsoleKeyCode.Shift, ConsoleKeyCode.Escape);
+```
+
+There are helpers for the common support actions:
+
+```csharp
+session.SendAltTab();
+session.SendWinR();
+session.SendCtrlShiftEsc();
 ```
 
 This is useful for support tools that expose a toolbar of recovery actions.

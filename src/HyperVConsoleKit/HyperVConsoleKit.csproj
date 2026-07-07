@@ -1,11 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFrameworks>net46;net8.0-windows</TargetFrameworks>
+    <TargetFrameworks>net46;netstandard2.0;net8.0-windows</TargetFrameworks>
     <RootNamespace>HyperVConsoleKit</RootNamespace>
     <AssemblyName>HyperVConsoleKit</AssemblyName>
     <PackageId>HyperVConsoleKit</PackageId>
-    <Version>0.1.0</Version>
+    <Version>0.2.0</Version>
     <Authors>HyperVConsoleKit</Authors>
     <Description>Host-side emergency Hyper-V VM console access toolkit.</Description>
     <PackageTags>Hyper-V;WMI;console;virtualization</PackageTags>
@@ -14,6 +14,10 @@
     <RepositoryUrl>https://github.com/ml6719/HyperVConsole</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageProjectUrl>https://github.com/ml6719/HyperVConsole</PackageProjectUrl>
+    <ContinuousIntegrationBuild>true</ContinuousIntegrationBuild>
+    <Deterministic>true</Deterministic>
+    <IncludeSymbols>true</IncludeSymbols>
+    <SymbolPackageFormat>snupkg</SymbolPackageFormat>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -23,13 +27,17 @@
     <Reference Include="System.Management" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0' Or '$(TargetFramework)' == 'net8.0-windows'">
     <PackageReference Include="System.Management" Version="9.0.6" />
   </ItemGroup>
 
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">
+    <PackageReference Include="Microsoft.Win32.Registry" Version="5.0.0" />
   </ItemGroup>
 
 </Project>

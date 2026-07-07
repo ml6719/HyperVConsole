@@ -1,0 +1,164 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+
+namespace HyperVConsoleKit
+{
+    public sealed class HyperVConsoleFrameHub
+    {
+        private readonly IHyperVConsoleSession _session;
+        private readonly ConsoleFrameStreamOptions _options;
+        private readonly int? _maxViewers;
+        private readonly object _lock = new object();
+        private readonly List<FrameHubSubscriber> _subscribers = new List<FrameHubSubscriber>();
+
+        public HyperVConsoleFrameHub(IHyperVConsoleSession session, ConsoleFrameStreamOptions options)
+            : this(session, options, null)
+        {
+        }
+
+        public HyperVConsoleFrameHub(IHyperVConsoleSession session, ConsoleFrameStreamOptions options, int? maxViewers)
+        {
+            if (session == null)
+            {
+                throw new ArgumentNullException("session");
+            }
+
+            _session = session;
+            _options = options ?? new ConsoleFrameStreamOptions();
+            _maxViewers = maxViewers;
+        }
+
+        public int ViewerCount
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _subscribers.Count;
+                }
+            }
+        }
+
+        public Task RunAsync(CancellationToken cancellationToken)
+        {
+            return _session.StreamFramesAsync(_options, PublishAsync, cancellationToken);
+        }
+
+        public async Task AddViewerAsync(Func<ConsoleFrame, CancellationToken, Task> onFrame, CancellationToken cancellationToken)
+        {
+            if (onFrame == null)
+            {
+                throw new ArgumentNullException("onFrame");
+            }
+
+            var subscriber = new FrameHubSubscriber(onFrame);
+            lock (_lock)
+            {
+                if (_maxViewers.HasValue && _subscribers.Count >= _maxViewers.Value)
+                {
+                    throw new HyperVConsoleException("The maximum number of console viewers has been reached.");
+                }
+
+                _subscribers.Add(subscriber);
+            }
+
+            try
+            {
+                await subscriber.RunAsync(cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                lock (_lock)
+                {
+                    _subscribers.Remove(subscriber);
+                }
+
+                subscriber.Dispose();
+            }
+        }
+
+        private Task PublishAsync(ConsoleFrame frame, CancellationToken cancellationToken)
+        {
+            FrameHubSubscriber[] subscribers;
+            lock (_lock)
+            {
+                subscribers = _subscribers.ToArray();
+            }
+
+            foreach (var subscriber in subscribers)
+            {
+                subscriber.Publish(frame);
+            }
+
+            return Task.FromResult(0);
+        }
+
+        private sealed class FrameHubSubscriber : IDisposable
+        {
+            private readonly Func<ConsoleFrame, CancellationToken, Task> _onFrame;
+            private readonly object _lock = new object();
+            private readonly SemaphoreSlim _signal = new SemaphoreSlim(0, 1);
+            private ConsoleFrame _latest;
+            private bool _signalPending;
+            private bool _disposed;
+
+            public FrameHubSubscriber(Func<ConsoleFrame, CancellationToken, Task> onFrame)
+            {
+                _onFrame = onFrame;
+            }
+
+            public void Publish(ConsoleFrame frame)
+            {
+                lock (_lock)
+                {
+                    if (_disposed)
+                    {
+                        return;
+                    }
+
+                    _latest = frame;
+                    if (!_signalPending)
+                    {
+                        _signalPending = true;
+                        _signal.Release();
+                    }
+                }
+            }
+
+            public async Task RunAsync(CancellationToken cancellationToken)
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                    ConsoleFrame frame;
+                    lock (_lock)
+                    {
+                        frame = _latest;
+                        _latest = null;
+                        _signalPending = false;
+                    }
+
+                    if (frame != null)
+                    {
+                        await _onFrame(frame, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            public void Dispose()
+            {
+                lock (_lock)
+                {
+                    _disposed = true;
+                    _latest = null;
+                }
+
+                _signal.Dispose();
+            }
+        }
+    }
+}

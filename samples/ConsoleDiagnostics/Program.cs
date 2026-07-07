@@ -19,6 +19,16 @@ Console.WriteLine($"Target: {vm.Name} ({vm.Id})");
 Console.WriteLine($"State: {vm.State}");
 Console.WriteLine();
 
+var report = client.RunDiagnostics(vm.Id);
+Console.WriteLine("[Structured diagnostics]");
+Console.WriteLine($"  Overall: {report.OverallStatus}");
+foreach (var item in report.Items)
+{
+    Console.WriteLine($"  {item.Status}: {item.Name} - {item.Message}");
+}
+
+Console.WriteLine();
+
 Run("Capabilities", () =>
 {
     var capabilities = client.GetConsoleCapabilities(vm.Id);

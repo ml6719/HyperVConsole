@@ -15,14 +15,27 @@ namespace HyperVConsoleKit
         internal const string NamespacePath = @"root\virtualization\v2";
         private readonly ManagementScope _scope;
         private readonly object _wmiLock = new object();
+        private readonly HyperVConsolePolicy _policy;
         private static readonly TimeSpan DefaultJobTimeout = TimeSpan.FromMinutes(5);
+        public event EventHandler<HyperVConsoleAuditEvent> Activity;
 
         public HyperVConsoleClient() : this(NamespacePath)
         {
         }
 
         public HyperVConsoleClient(string namespacePath)
+            : this(namespacePath, null)
         {
+        }
+
+        public HyperVConsoleClient(HyperVConsolePolicy policy)
+            : this(NamespacePath, policy)
+        {
+        }
+
+        public HyperVConsoleClient(string namespacePath, HyperVConsolePolicy policy)
+        {
+            _policy = policy ?? new HyperVConsolePolicy();
             _scope = new ManagementScope(namespacePath);
             _scope.Connect();
         }
@@ -89,7 +102,10 @@ namespace HyperVConsoleKit
                 throw new HyperVConsoleException("Enhanced Session is detected and can be launched through VMConnect, but programmatic frame streaming and input injection are only implemented for RawHostConsole mode.");
             }
 
-            return new HyperVConsoleSession(_scope, _wmiLock, virtualMachineId);
+            var sessionPolicy = options.Policy ?? _policy;
+            var session = new HyperVConsoleSession(_scope, _wmiLock, virtualMachineId, sessionPolicy);
+            session.Activity += OnSessionActivity;
+            return session;
         }
 
         public HyperVConsoleCapabilities GetConsoleCapabilities(Guid virtualMachineId)
@@ -138,7 +154,9 @@ namespace HyperVConsoleKit
 
         public void StartVirtualMachine(Guid virtualMachineId)
         {
+            _policy.EnsurePowerControlAllowed();
             RequestStateChange(virtualMachineId, 2);
+            RaiseActivity(virtualMachineId, HyperVConsoleAuditAction.VirtualMachineStarted, true, "VM start requested.", null);
         }
 
         public Task StartVirtualMachineAsync(Guid virtualMachineId, CancellationToken cancellationToken)
@@ -148,7 +166,9 @@ namespace HyperVConsoleKit
 
         public void StopVirtualMachine(Guid virtualMachineId, bool force)
         {
+            _policy.EnsurePowerControlAllowed();
             RequestStateChange(virtualMachineId, force ? (ushort)3 : (ushort)4);
+            RaiseActivity(virtualMachineId, HyperVConsoleAuditAction.VirtualMachineStopped, true, force ? "VM force stop requested." : "VM stop requested.", null);
         }
 
         public Task StopVirtualMachineAsync(Guid virtualMachineId, bool force, CancellationToken cancellationToken)
@@ -158,7 +178,9 @@ namespace HyperVConsoleKit
 
         public void ResetVirtualMachine(Guid virtualMachineId)
         {
+            _policy.EnsurePowerControlAllowed();
             RequestStateChange(virtualMachineId, 11);
+            RaiseActivity(virtualMachineId, HyperVConsoleAuditAction.VirtualMachineReset, true, "VM reset requested.", null);
         }
 
         public Task ResetVirtualMachineAsync(Guid virtualMachineId, CancellationToken cancellationToken)
@@ -398,6 +420,83 @@ namespace HyperVConsoleKit
         {
             return Task.Run(action, cancellationToken);
         }
+
+        public HyperVConsoleDiagnosticReport RunDiagnostics(Guid virtualMachineId)
+        {
+            var items = new List<HyperVConsoleDiagnosticItem>();
+            var vm = GetVirtualMachine(virtualMachineId);
+            var capabilities = GetConsoleCapabilities(virtualMachineId);
+
+            AddDiagnostic(items, "VM state", capabilities.CanCaptureNow ? HyperVConsoleDiagnosticStatus.Pass : HyperVConsoleDiagnosticStatus.Warning, capabilities.CanCaptureNow ? "VM is running." : "VM is not running; console capture and input are unavailable right now.");
+            AddDiagnostic(items, "Raw capture", capabilities.SupportsRawCapture ? HyperVConsoleDiagnosticStatus.Pass : HyperVConsoleDiagnosticStatus.Fail, capabilities.SupportsRawCapture ? "Raw host capture is supported." : "Raw host capture is not supported.");
+            AddDiagnostic(items, "Keyboard input", capabilities.CanSendKeyboardInputNow ? HyperVConsoleDiagnosticStatus.Pass : HyperVConsoleDiagnosticStatus.Warning, capabilities.CanSendKeyboardInputNow ? "Keyboard input is available." : "Keyboard input is not available right now.");
+            AddDiagnostic(items, "Mouse input", capabilities.CanSendMouseInputNow ? HyperVConsoleDiagnosticStatus.Pass : HyperVConsoleDiagnosticStatus.Skipped, capabilities.CanSendMouseInputNow ? "Synthetic mouse input is available." : "Synthetic mouse input is not available.");
+            AddDiagnostic(items, "Enhanced Session", capabilities.SupportsEnhancedSession ? HyperVConsoleDiagnosticStatus.Pass : HyperVConsoleDiagnosticStatus.Skipped, capabilities.SupportsEnhancedSession ? "Enhanced Session appears available for VMConnect." : "Enhanced Session is unavailable or unknown.");
+
+            foreach (var limitation in capabilities.Limitations ?? new string[0])
+            {
+                AddDiagnostic(items, "Limitation", HyperVConsoleDiagnosticStatus.Warning, limitation);
+            }
+
+            var overall = items.Any(i => i.Status == HyperVConsoleDiagnosticStatus.Fail)
+                ? HyperVConsoleDiagnosticStatus.Fail
+                : items.Any(i => i.Status == HyperVConsoleDiagnosticStatus.Warning)
+                    ? HyperVConsoleDiagnosticStatus.Warning
+                    : HyperVConsoleDiagnosticStatus.Pass;
+
+            return new HyperVConsoleDiagnosticReport
+            {
+                VirtualMachineId = virtualMachineId,
+                VirtualMachineName = vm.Name,
+                State = vm.State,
+                CheckedUtc = DateTime.UtcNow,
+                Capabilities = capabilities,
+                Items = items,
+                OverallStatus = overall
+            };
+        }
+
+        public Task<HyperVConsoleDiagnosticReport> RunDiagnosticsAsync(Guid virtualMachineId, CancellationToken cancellationToken)
+        {
+            return RunAsync(() => RunDiagnostics(virtualMachineId), cancellationToken);
+        }
+
+        private static void AddDiagnostic(ICollection<HyperVConsoleDiagnosticItem> items, string name, HyperVConsoleDiagnosticStatus status, string message)
+        {
+            items.Add(new HyperVConsoleDiagnosticItem { Name = name, Status = status, Message = message });
+        }
+
+        private void OnSessionActivity(object sender, HyperVConsoleAuditEvent e)
+        {
+            var handler = Activity;
+            if (handler != null)
+            {
+                handler(this, e);
+            }
+        }
+
+        private void RaiseActivity(Guid virtualMachineId, HyperVConsoleAuditAction action, bool success, string message, long? bytes)
+        {
+            var handler = Activity;
+            if (handler != null)
+            {
+                handler(this, CreateAuditEvent(virtualMachineId, action, success, message, bytes));
+            }
+        }
+
+        internal static HyperVConsoleAuditEvent CreateAuditEvent(Guid virtualMachineId, HyperVConsoleAuditAction action, bool success, string message, long? bytes)
+        {
+            return new HyperVConsoleAuditEvent
+            {
+                TimestampUtc = DateTime.UtcNow,
+                VirtualMachineId = virtualMachineId,
+                Action = action,
+                Success = success,
+                Message = message,
+                Bytes = bytes,
+                UserName = Environment.UserName
+            };
+        }
     }
 
     internal sealed class HyperVConsoleSession : IHyperVConsoleSession
@@ -405,19 +504,24 @@ namespace HyperVConsoleKit
         private readonly ManagementScope _scope;
         private readonly object _wmiLock;
         private readonly Guid _virtualMachineId;
+        private readonly HyperVConsolePolicy _policy;
         private bool _disposed;
+        public event EventHandler<HyperVConsoleAuditEvent> Activity;
 
-        public HyperVConsoleSession(ManagementScope scope, object wmiLock, Guid virtualMachineId)
+        public HyperVConsoleSession(ManagementScope scope, object wmiLock, Guid virtualMachineId, HyperVConsolePolicy policy)
         {
             _scope = scope;
             _wmiLock = wmiLock;
             _virtualMachineId = virtualMachineId;
+            _policy = policy ?? new HyperVConsolePolicy();
             lock (_wmiLock)
             {
                 using (GetVirtualMachineObject())
                 {
                 }
             }
+
+            RaiseActivity(HyperVConsoleAuditAction.SessionOpened, true, "Console session opened.", null);
         }
 
         public Guid VirtualMachineId
@@ -433,6 +537,8 @@ namespace HyperVConsoleKit
                 options = new ConsoleFrameOptions();
             }
 
+            _policy.EnsureCaptureAllowed();
+            _policy.ApplyTo(options);
             ValidateFrameOptions(options);
 
             lock (_wmiLock)
@@ -462,7 +568,7 @@ namespace HyperVConsoleKit
                         HyperVConsoleClient.EnsureCompleted("Msvm_VirtualSystemManagementService", "GetVirtualSystemThumbnailImage", outParams, _scope);
 
                         var rawRgb565 = NormalizeRawRgb565((byte[])outParams["ImageData"], options.Width, options.Height);
-                        return new ConsoleFrame
+                        var frame = new ConsoleFrame
                         {
                             VirtualMachineId = _virtualMachineId,
                             CapturedUtc = DateTime.UtcNow,
@@ -471,6 +577,8 @@ namespace HyperVConsoleKit
                             PixelFormat = ConsoleFramePixelFormat.Rgb565,
                             RawBytes = rawRgb565
                         };
+                        RaiseActivity(HyperVConsoleAuditAction.FrameCaptured, true, "Frame captured.", frame.RawBytes.Length);
+                        return frame;
                     }
                 }
             }
@@ -494,7 +602,15 @@ namespace HyperVConsoleKit
                 options = new ConsoleFrameStreamOptions();
             }
 
+            _policy.EnsureCaptureAllowed();
+            _policy.ApplyTo(options);
             ValidateStreamOptions(options);
+            if (options.DropFramesWhenBehind)
+            {
+                await StreamLatestFramesAsync(options, onFrame, cancellationToken).ConfigureAwait(false);
+                return;
+            }
+
             var captureOptions = new ConsoleFrameOptions { Width = options.Width, Height = options.Height };
             byte[] previousPayload = null;
             long sequenceNumber = 0;
@@ -524,6 +640,7 @@ namespace HyperVConsoleKit
                 if (shouldSend)
                 {
                     await onFrame(streamFrame, cancellationToken).ConfigureAwait(false);
+                    RaiseActivity(HyperVConsoleAuditAction.FrameStreamed, true, "Frame streamed.", streamFrame.PayloadBytes);
                     previousPayload = converted;
                     sequenceNumber++;
                     framesSinceKeyFrame = streamFrame.IsKeyFrame ? 0 : framesSinceKeyFrame + 1;
@@ -543,15 +660,141 @@ namespace HyperVConsoleKit
             }
         }
 
+        private async Task StreamLatestFramesAsync(ConsoleFrameStreamOptions options, Func<ConsoleFrame, CancellationToken, Task> onFrame, CancellationToken cancellationToken)
+        {
+            var captureOptions = new ConsoleFrameOptions { Width = options.Width, Height = options.Height };
+            var latestLock = new object();
+            var signal = new SemaphoreSlim(0, 1);
+            ConsoleFrame latestCaptured = null;
+            Exception producerException = null;
+            var producerDone = false;
+            var signalPending = false;
+
+            var producer = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        var started = DateTime.UtcNow;
+                        var captured = await CaptureFrameAsync(captureOptions, cancellationToken).ConfigureAwait(false);
+                        lock (latestLock)
+                        {
+                            latestCaptured = captured;
+                            if (!signalPending)
+                            {
+                                signalPending = true;
+                                signal.Release();
+                            }
+                        }
+
+                        var elapsedMs = (int)(DateTime.UtcNow - started).TotalMilliseconds;
+                        var delayMs = Math.Max(1, (int)Math.Round(1000.0 / options.ActiveFramesPerSecond));
+                        var remainingMs = delayMs - elapsedMs;
+                        if (remainingMs > 0)
+                        {
+                            await Task.Delay(remainingMs, cancellationToken).ConfigureAwait(false);
+                        }
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                }
+                catch (Exception ex)
+                {
+                    producerException = ex;
+                }
+                finally
+                {
+                    lock (latestLock)
+                    {
+                        producerDone = true;
+                        if (!signalPending)
+                        {
+                            signalPending = true;
+                            signal.Release();
+                        }
+                    }
+                }
+            }, cancellationToken);
+
+            byte[] previousPayload = null;
+            long sequenceNumber = 0;
+            var framesSinceKeyFrame = 0;
+            var byteWindowStarted = DateTime.UtcNow;
+            long byteWindowTotal = 0;
+
+            try
+            {
+                while (!cancellationToken.IsCancellationRequested)
+                {
+                    await signal.WaitAsync(cancellationToken).ConfigureAwait(false);
+
+                    ConsoleFrame captured;
+                    lock (latestLock)
+                    {
+                        captured = latestCaptured;
+                        latestCaptured = null;
+                        signalPending = false;
+                        if (captured == null && producerDone)
+                        {
+                            break;
+                        }
+                    }
+
+                    if (captured == null)
+                    {
+                        continue;
+                    }
+
+                    var converted = PixelCodec.ConvertRgb565(captured.RawBytes, options.PixelFormat);
+                    var forceKeyFrame = previousPayload == null || !options.SendChangedTilesOnly || framesSinceKeyFrame >= options.FullFrameInterval;
+                    var streamFrame = BuildStreamFrame(captured, converted, previousPayload, options, forceKeyFrame, sequenceNumber + 1);
+                    var changedBytes = streamFrame.UpdateKind == ConsoleFrameUpdateKind.FullFrame
+                        ? streamFrame.PayloadBytes
+                        : streamFrame.Tiles.Sum(t => (long)t.RawBytes.Length);
+                    var targetFps = !options.UseAdaptiveFrameRate
+                        ? options.FramesPerSecond
+                        : changedBytes < options.ActiveChangeThresholdBytes
+                            ? options.IdleFramesPerSecond
+                            : options.ActiveFramesPerSecond;
+
+                    streamFrame.TargetFramesPerSecond = targetFps;
+                    if (!CanSpendBytes(streamFrame.PayloadBytes, options.MaxBytesPerSecond, ref byteWindowStarted, ref byteWindowTotal, forceKeyFrame))
+                    {
+                        continue;
+                    }
+
+                    await onFrame(streamFrame, cancellationToken).ConfigureAwait(false);
+                    RaiseActivity(HyperVConsoleAuditAction.FrameStreamed, true, "Frame streamed.", streamFrame.PayloadBytes);
+                    previousPayload = converted;
+                    sequenceNumber++;
+                    framesSinceKeyFrame = streamFrame.IsKeyFrame ? 0 : framesSinceKeyFrame + 1;
+                }
+
+                if (producerException != null)
+                {
+                    throw producerException;
+                }
+            }
+            finally
+            {
+                signal.Dispose();
+                await producer.ConfigureAwait(false);
+            }
+        }
+
         public void SendText(string text)
         {
             ThrowIfDisposed();
+            _policy.EnsureKeyboardAllowed();
             if (string.IsNullOrEmpty(text))
             {
                 return;
             }
 
             InvokeKeyboardMethod("TypeText", "asciiText", text);
+            RaiseActivity(HyperVConsoleAuditAction.TextSent, true, "Text sent.", text.Length);
         }
 
         public Task SendTextAsync(string text, CancellationToken cancellationToken)
@@ -561,7 +804,9 @@ namespace HyperVConsoleKit
 
         public void SendKey(ConsoleKeyCode key)
         {
+            _policy.EnsureKeyboardAllowed();
             InvokeKeyboardMethod("TypeKey", "keyCode", (uint)key);
+            RaiseActivity(HyperVConsoleAuditAction.KeySent, true, "Key sent: " + key, null);
         }
 
         public Task SendKeyAsync(ConsoleKeyCode key, CancellationToken cancellationToken)
@@ -571,6 +816,7 @@ namespace HyperVConsoleKit
 
         public void SendKeyDown(ConsoleKeyCode key)
         {
+            _policy.EnsureKeyboardAllowed();
             InvokeKeyboardMethod("PressKey", "keyCode", (uint)key);
         }
 
@@ -581,6 +827,7 @@ namespace HyperVConsoleKit
 
         public void SendKeyUp(ConsoleKeyCode key)
         {
+            _policy.EnsureKeyboardAllowed();
             InvokeKeyboardMethod("ReleaseKey", "keyCode", (uint)key);
         }
 
@@ -641,6 +888,8 @@ namespace HyperVConsoleKit
                     releaseFailure.Throw();
                 }
             }
+
+            RaiseActivity(HyperVConsoleAuditAction.ChordSent, true, "Chord sent: " + string.Join("+", keys.Select(k => k.ToString()).ToArray()), null);
         }
 
         public Task SendChordAsync(CancellationToken cancellationToken, params ConsoleKeyCode[] keys)
@@ -696,12 +945,14 @@ namespace HyperVConsoleKit
         public void SendScancodes(byte[] scancodes)
         {
             ThrowIfDisposed();
+            _policy.EnsureKeyboardAllowed();
             if (scancodes == null || scancodes.Length == 0)
             {
                 return;
             }
 
             InvokeKeyboardMethod("TypeScancodes", "scanCodes", scancodes);
+            RaiseActivity(HyperVConsoleAuditAction.ScancodesSent, true, "Scancodes sent.", scancodes.Length);
         }
 
         public Task SendScancodesAsync(byte[] scancodes, CancellationToken cancellationToken)
@@ -711,7 +962,9 @@ namespace HyperVConsoleKit
 
         public void SendCtrlAltDel()
         {
+            _policy.EnsureKeyboardAllowed();
             InvokeKeyboardMethod("TypeCtrlAltDel", null, null);
+            RaiseActivity(HyperVConsoleAuditAction.CtrlAltDelSent, true, "Ctrl+Alt+Del sent.", null);
         }
 
         public Task SendCtrlAltDelAsync(CancellationToken cancellationToken)
@@ -719,9 +972,40 @@ namespace HyperVConsoleKit
             return Task.Run(() => SendCtrlAltDel(), cancellationToken);
         }
 
+        public void SendAltTab()
+        {
+            SendChord(ConsoleKeyCode.Alt, ConsoleKeyCode.Tab);
+        }
+
+        public Task SendAltTabAsync(CancellationToken cancellationToken)
+        {
+            return Task.Run(() => SendAltTab(), cancellationToken);
+        }
+
+        public void SendWinR()
+        {
+            SendChord(ConsoleKeyCode.LeftWindows, ConsoleKeyCode.R);
+        }
+
+        public Task SendWinRAsync(CancellationToken cancellationToken)
+        {
+            return Task.Run(() => SendWinR(), cancellationToken);
+        }
+
+        public void SendCtrlShiftEsc()
+        {
+            SendChord(ConsoleKeyCode.Control, ConsoleKeyCode.Shift, ConsoleKeyCode.Escape);
+        }
+
+        public Task SendCtrlShiftEscAsync(CancellationToken cancellationToken)
+        {
+            return Task.Run(() => SendCtrlShiftEsc(), cancellationToken);
+        }
+
         public bool TrySendMouseMove(int x, int y)
         {
             ThrowIfDisposed();
+            _policy.EnsureMouseAllowed();
             try
             {
                 using (var mouse = GetMouseObject())
@@ -761,6 +1045,7 @@ namespace HyperVConsoleKit
         public bool TrySendMouseClick(int x, int y, MouseButton button)
         {
             ThrowIfDisposed();
+            _policy.EnsureMouseAllowed();
             lock (_wmiLock)
             {
                 try
@@ -787,7 +1072,9 @@ namespace HyperVConsoleKit
                             inParams["ButtonIndex"] = (ushort)button;
                             using (var outParams = mouse.InvokeMethod("ClickButton", inParams, null))
                             {
-                                return IsSuccessfulMouseReturn(outParams);
+                                var success = IsSuccessfulMouseReturn(outParams);
+                                RaiseActivity(HyperVConsoleAuditAction.MouseClicked, success, "Mouse click: " + button, null);
+                                return success;
                             }
                         }
                     }
@@ -806,6 +1093,7 @@ namespace HyperVConsoleKit
 
         public bool TrySendMouseDoubleClick(int x, int y, MouseButton button)
         {
+            _policy.EnsureMouseAllowed();
             lock (_wmiLock)
             {
                 if (!TrySendMouseClick(x, y, button))
@@ -814,7 +1102,9 @@ namespace HyperVConsoleKit
                 }
 
                 System.Threading.Thread.Sleep(100);
-                return TrySendMouseClick(x, y, button);
+                var success = TrySendMouseClick(x, y, button);
+                RaiseActivity(HyperVConsoleAuditAction.MouseDoubleClicked, success, "Mouse double click: " + button, null);
+                return success;
             }
         }
 
@@ -825,6 +1115,11 @@ namespace HyperVConsoleKit
 
         public void Dispose()
         {
+            if (!_disposed)
+            {
+                RaiseActivity(HyperVConsoleAuditAction.SessionDisposed, true, "Console session disposed.", null);
+            }
+
             _disposed = true;
         }
 
@@ -1107,6 +1402,15 @@ namespace HyperVConsoleKit
             if (_disposed)
             {
                 throw new ObjectDisposedException("HyperVConsoleSession");
+            }
+        }
+
+        private void RaiseActivity(HyperVConsoleAuditAction action, bool success, string message, long? bytes)
+        {
+            var handler = Activity;
+            if (handler != null)
+            {
+                handler(this, HyperVConsoleClient.CreateAuditEvent(_virtualMachineId, action, success, message, bytes));
             }
         }
     }

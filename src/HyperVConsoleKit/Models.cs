@@ -83,6 +83,8 @@ namespace HyperVConsoleKit
         Down = 0x28,
         Insert = 0x2D,
         Delete = 0x2E,
+        LeftWindows = 0x5B,
+        RightWindows = 0x5C,
         D0 = 0x30,
         D1 = 0x31,
         D2 = 0x32,
@@ -140,6 +142,34 @@ namespace HyperVConsoleKit
         Middle = 2
     }
 
+    public enum HyperVConsoleAuditAction
+    {
+        SessionOpened = 0,
+        SessionDisposed = 1,
+        FrameCaptured = 2,
+        FrameStreamed = 3,
+        TextSent = 4,
+        KeySent = 5,
+        ChordSent = 6,
+        ScancodesSent = 7,
+        CtrlAltDelSent = 8,
+        MouseMoved = 9,
+        MouseClicked = 10,
+        MouseDoubleClicked = 11,
+        VirtualMachineStarted = 12,
+        VirtualMachineStopped = 13,
+        VirtualMachineReset = 14,
+        EnhancedSessionLaunchRequested = 15
+    }
+
+    public enum HyperVConsoleDiagnosticStatus
+    {
+        Pass = 0,
+        Warning = 1,
+        Fail = 2,
+        Skipped = 3
+    }
+
     public sealed class HyperVVirtualMachine
     {
         public Guid Id { get; set; }
@@ -161,6 +191,7 @@ namespace HyperVConsoleKit
     public sealed class HyperVConsoleOpenOptions
     {
         public HyperVConsoleMode Mode { get; set; } = HyperVConsoleMode.Auto;
+        public HyperVConsolePolicy Policy { get; set; }
     }
 
     public sealed class HyperVConsoleCapabilities
@@ -189,6 +220,149 @@ namespace HyperVConsoleKit
         public string Arguments { get; set; }
         public bool CanLaunchFromCurrentProcess { get; set; }
         public string Limitation { get; set; }
+    }
+
+    public sealed class HyperVConsolePolicy
+    {
+        public bool AllowCapture { get; set; } = true;
+        public bool AllowKeyboardInput { get; set; } = true;
+        public bool AllowMouseInput { get; set; } = true;
+        public bool AllowPowerControl { get; set; } = true;
+        public int? MaxWidth { get; set; }
+        public int? MaxHeight { get; set; }
+        public double? MaxFramesPerSecond { get; set; }
+        public long? MaxBytesPerSecond { get; set; }
+        public ConsoleFramePixelFormat? MaxColorDepth { get; set; }
+        public int? MaxConcurrentViewers { get; set; }
+        public TimeSpan? IdleTimeout { get; set; }
+
+        public void ApplyTo(ConsoleFrameOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException("options");
+            }
+
+            if (MaxWidth.HasValue && options.Width > MaxWidth.Value)
+            {
+                options.Width = MaxWidth.Value;
+            }
+
+            if (MaxHeight.HasValue && options.Height > MaxHeight.Value)
+            {
+                options.Height = MaxHeight.Value;
+            }
+        }
+
+        public void ApplyTo(ConsoleFrameStreamOptions options)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException("options");
+            }
+
+            if (MaxWidth.HasValue && options.Width > MaxWidth.Value)
+            {
+                options.Width = MaxWidth.Value;
+            }
+
+            if (MaxHeight.HasValue && options.Height > MaxHeight.Value)
+            {
+                options.Height = MaxHeight.Value;
+            }
+            if (MaxFramesPerSecond.HasValue)
+            {
+                options.FramesPerSecond = Math.Min(options.FramesPerSecond, MaxFramesPerSecond.Value);
+                options.ActiveFramesPerSecond = Math.Min(options.ActiveFramesPerSecond, MaxFramesPerSecond.Value);
+                options.IdleFramesPerSecond = Math.Min(options.IdleFramesPerSecond, MaxFramesPerSecond.Value);
+            }
+
+            if (MaxBytesPerSecond.HasValue)
+            {
+                options.MaxBytesPerSecond = options.MaxBytesPerSecond.HasValue
+                    ? Math.Min(options.MaxBytesPerSecond.Value, MaxBytesPerSecond.Value)
+                    : MaxBytesPerSecond.Value;
+            }
+
+            if (MaxColorDepth.HasValue && GetColorDepthRank(options.PixelFormat) > GetColorDepthRank(MaxColorDepth.Value))
+            {
+                options.PixelFormat = MaxColorDepth.Value;
+            }
+        }
+
+        internal void EnsureCaptureAllowed()
+        {
+            if (!AllowCapture)
+            {
+                throw new HyperVConsoleException("Console capture is disabled by policy.");
+            }
+        }
+
+        internal void EnsureKeyboardAllowed()
+        {
+            if (!AllowKeyboardInput)
+            {
+                throw new HyperVConsoleException("Keyboard input is disabled by policy.");
+            }
+        }
+
+        internal void EnsureMouseAllowed()
+        {
+            if (!AllowMouseInput)
+            {
+                throw new HyperVConsoleException("Mouse input is disabled by policy.");
+            }
+        }
+
+        internal void EnsurePowerControlAllowed()
+        {
+            if (!AllowPowerControl)
+            {
+                throw new HyperVConsoleException("VM power control is disabled by policy.");
+            }
+        }
+
+        private static int GetColorDepthRank(ConsoleFramePixelFormat format)
+        {
+            switch (format)
+            {
+                case ConsoleFramePixelFormat.Mono1: return 1;
+                case ConsoleFramePixelFormat.Gray4: return 4;
+                case ConsoleFramePixelFormat.Rgb332:
+                case ConsoleFramePixelFormat.Gray8: return 8;
+                case ConsoleFramePixelFormat.Rgb565: return 16;
+                default: throw new ArgumentOutOfRangeException("format");
+            }
+        }
+    }
+
+    public sealed class HyperVConsoleAuditEvent
+    {
+        public DateTime TimestampUtc { get; set; }
+        public Guid VirtualMachineId { get; set; }
+        public HyperVConsoleAuditAction Action { get; set; }
+        public bool Success { get; set; }
+        public string Message { get; set; }
+        public long? Bytes { get; set; }
+        public string UserName { get; set; }
+    }
+
+    public sealed class HyperVConsoleDiagnosticItem
+    {
+        public string Name { get; set; }
+        public HyperVConsoleDiagnosticStatus Status { get; set; }
+        public string Message { get; set; }
+    }
+
+    public sealed class HyperVConsoleDiagnosticReport
+    {
+        public Guid VirtualMachineId { get; set; }
+        public string VirtualMachineName { get; set; }
+        public HyperVVirtualMachineState State { get; set; }
+        public DateTime CheckedUtc { get; set; }
+        public HyperVConsoleCapabilities Capabilities { get; set; }
+        public IReadOnlyList<HyperVConsoleDiagnosticItem> Items { get; set; }
+        public HyperVConsoleDiagnosticStatus OverallStatus { get; set; }
     }
 
     public sealed class ConsolePasteOptions
@@ -300,6 +474,7 @@ namespace HyperVConsoleKit
 
     public interface IHyperVConsoleSession : IDisposable
     {
+        event EventHandler<HyperVConsoleAuditEvent> Activity;
         Guid VirtualMachineId { get; }
         ConsoleFrame CaptureFrame(ConsoleFrameOptions options);
         Task<ConsoleFrame> CaptureFrameAsync(ConsoleFrameOptions options, CancellationToken cancellationToken);
@@ -320,6 +495,12 @@ namespace HyperVConsoleKit
         Task SendScancodesAsync(byte[] scancodes, CancellationToken cancellationToken);
         void SendCtrlAltDel();
         Task SendCtrlAltDelAsync(CancellationToken cancellationToken);
+        void SendAltTab();
+        Task SendAltTabAsync(CancellationToken cancellationToken);
+        void SendWinR();
+        Task SendWinRAsync(CancellationToken cancellationToken);
+        void SendCtrlShiftEsc();
+        Task SendCtrlShiftEscAsync(CancellationToken cancellationToken);
         bool TrySendMouseMove(int x, int y);
         Task<bool> TrySendMouseMoveAsync(int x, int y, CancellationToken cancellationToken);
         bool TrySendMouseClick(int x, int y, MouseButton button);
