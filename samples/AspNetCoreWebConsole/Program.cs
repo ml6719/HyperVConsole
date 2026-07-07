@@ -1,72 +1,139 @@
+using System.Collections.Concurrent;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using HyperVConsoleKit;
 
 var builder = WebApplication.CreateBuilder(args);
+var webOptions = builder.Configuration.GetSection("HyperVConsole").Get<HyperVConsoleWebOptions>() ?? new HyperVConsoleWebOptions();
+var policy = webOptions.ToPolicy();
 var app = builder.Build();
-var client = new HyperVConsoleClient();
+var client = new HyperVConsoleClient(policy);
+var sessionManager = new HyperVConsoleSessionManager(client, policy);
+var auditLog = new ConcurrentQueue<HyperVConsoleAuditEvent>();
+client.Activity += (_, e) =>
+{
+    auditLog.Enqueue(e);
+    while (auditLog.Count > webOptions.MaxAuditEvents && auditLog.TryDequeue(out var ignored))
+    {
+    }
+};
 
 app.UseWebSockets();
+app.Use(async (context, next) =>
+{
+    if (!IsAuthorized(context, webOptions))
+    {
+        context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+        await context.Response.WriteAsJsonAsync(new { error = "Missing or invalid console API key." });
+        return;
+    }
+
+    await next();
+});
 
 app.MapGet("/", () => Results.Content(GetHtml(), "text/html; charset=utf-8"));
 
-app.MapGet("/api/vms", () => client.GetVirtualMachines());
+app.MapGet("/api/vms", () => SafeValue(() => client.GetVirtualMachines().Where(vm => IsAllowedVm(vm.Id, webOptions))));
 
-app.MapGet("/api/vms/{id:guid}/capabilities", (Guid id) => client.GetConsoleCapabilities(id));
+app.MapGet("/api/audit", () => auditLog.Reverse().Take(100).ToArray());
+
+app.MapGet("/api/vms/{id:guid}/capabilities", (Guid id) => SafeValue(() =>
+{
+    EnsureAllowedVm(id, webOptions);
+    return client.GetConsoleCapabilities(id);
+}));
+
+app.MapGet("/api/vms/{id:guid}/diagnostics", (Guid id) => SafeValue(() =>
+{
+    EnsureAllowedVm(id, webOptions);
+    return client.RunDiagnostics(id);
+}));
 
 app.MapPost("/api/vms/{id:guid}/enhanced-session", (Guid id) =>
 {
-    return client.TryLaunchEnhancedSession(id) ? Results.Ok() : Results.BadRequest(client.GetEnhancedSessionLaunchInfo(id));
+    return SafeResult(() =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        return client.TryLaunchEnhancedSession(id) ? Results.Ok() : Results.BadRequest(client.GetEnhancedSessionLaunchInfo(id));
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/start", (Guid id) =>
 {
-    client.StartVirtualMachine(id);
-    return Results.Ok();
+    return SafeResult(() =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        client.StartVirtualMachine(id);
+        return Results.Ok();
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/stop", (Guid id) =>
 {
-    client.StopVirtualMachine(id, false);
-    return Results.Ok();
+    return SafeResult(() =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        client.StopVirtualMachine(id, false);
+        return Results.Ok();
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/reset", (Guid id) =>
 {
-    client.ResetVirtualMachine(id);
-    return Results.Ok();
+    return SafeResult(() =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        client.ResetVirtualMachine(id);
+        return Results.Ok();
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/keys/{key}", (Guid id, string key) =>
 {
-    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
-    SendKeyCommand(session, key);
-    return Results.Ok();
+    return SafeResult(() =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole, Policy = policy });
+        SendKeyCommand(session, key);
+        return Results.Ok();
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/text", async (Guid id, HttpRequest request) =>
 {
-    using var reader = new StreamReader(request.Body, Encoding.UTF8);
-    var text = await reader.ReadToEndAsync();
-    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
-    session.SendText(text);
-    return Results.Ok();
+    return await SafeAsync(async () =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        var text = await reader.ReadToEndAsync();
+        using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole, Policy = policy });
+        session.SendText(text);
+        return Results.Ok();
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/paste", async (Guid id, HttpRequest request) =>
 {
-    using var reader = new StreamReader(request.Body, Encoding.UTF8);
-    var text = await reader.ReadToEndAsync();
-    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
-    await session.PasteTextAsKeystrokesAsync(text, new ConsolePasteOptions(), request.HttpContext.RequestAborted);
-    return Results.Ok();
+    return await SafeAsync(async () =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        using var reader = new StreamReader(request.Body, Encoding.UTF8);
+        var text = await reader.ReadToEndAsync();
+        using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole, Policy = policy });
+        await session.PasteTextAsKeystrokesAsync(text, new ConsolePasteOptions(), request.HttpContext.RequestAborted);
+        return Results.Ok();
+    });
 });
 
 app.MapPost("/api/vms/{id:guid}/mouse/click", (Guid id, int x, int y, MouseButton button) =>
 {
-    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
-    return session.TrySendMouseClick(x, y, button) ? Results.Ok() : Results.BadRequest();
+    return SafeResult(() =>
+    {
+        EnsureAllowedVm(id, webOptions);
+        using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole, Policy = policy });
+        return session.TrySendMouseClick(x, y, button) ? Results.Ok() : Results.BadRequest(new { error = "Mouse input is not available for this VM." });
+    });
 });
 
 app.Map("/ws/console/{id:guid}", async (Guid id, HttpContext context) =>
@@ -74,6 +141,13 @@ app.Map("/ws/console/{id:guid}", async (Guid id, HttpContext context) =>
     if (!context.WebSockets.IsWebSocketRequest)
     {
         context.Response.StatusCode = StatusCodes.Status400BadRequest;
+        return;
+    }
+
+    if (!IsAllowedVm(id, webOptions))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        await context.Response.WriteAsJsonAsync(new { error = "VM is not allowed by this sample gateway." });
         return;
     }
 
@@ -131,21 +205,39 @@ app.Map("/ws/console/{id:guid}", async (Guid id, HttpContext context) =>
     }
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
+    try
+    {
+        await sessionManager.AddViewerAsync(id, options, async (frame, cancellationToken) =>
+        {
+            if (socket.State == WebSocketState.Open)
+            {
+                await SendConsoleFrameAsync(socket, frame, cancellationToken);
+                return;
+            }
 
-    await session.StreamFramesAsync(options, async (frame, cancellationToken) =>
+            throw new OperationCanceledException();
+        }, context.RequestAborted);
+    }
+    catch (OperationCanceledException)
+    {
+    }
+    catch (Exception ex)
     {
         if (socket.State == WebSocketState.Open)
         {
-            await SendConsoleFrameAsync(socket, frame, cancellationToken);
-            return;
+            await socket.CloseAsync(WebSocketCloseStatus.InternalServerError, ex.Message, CancellationToken.None);
         }
-
-        throw new OperationCanceledException();
-    }, context.RequestAborted);
+    }
 });
 
-app.Run();
+try
+{
+    app.Run();
+}
+finally
+{
+    sessionManager.Dispose();
+}
 
 static void SendKeyCommand(IHyperVConsoleSession session, string key)
 {
@@ -181,8 +273,105 @@ static void SendKeyCommand(IHyperVConsoleSession session, string key)
         case "ctrlaltdel":
             session.SendCtrlAltDel();
             break;
+        case "alttab":
+            session.SendAltTab();
+            break;
+        case "winr":
+            session.SendWinR();
+            break;
+        case "ctrlshiftesc":
+            session.SendCtrlShiftEsc();
+            break;
         default:
             throw new InvalidOperationException("Unsupported key command: " + key);
+    }
+}
+
+static IResult SafeValue<T>(Func<T> action)
+{
+    try
+    {
+        return Results.Ok(action());
+    }
+    catch (HyperVVirtualMachineNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+}
+
+static IResult SafeResult(Func<IResult> action)
+{
+    try
+    {
+        return action();
+    }
+    catch (HyperVVirtualMachineNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+}
+
+static async Task<IResult> SafeAsync(Func<Task<IResult>> action)
+{
+    try
+    {
+        return await action();
+    }
+    catch (HyperVVirtualMachineNotFoundException ex)
+    {
+        return Results.NotFound(new { error = ex.Message });
+    }
+    catch (UnauthorizedAccessException ex)
+    {
+        return Results.Problem(ex.Message, statusCode: StatusCodes.Status403Forbidden);
+    }
+    catch (Exception ex)
+    {
+        return Results.BadRequest(new { error = ex.Message });
+    }
+}
+
+static bool IsAuthorized(HttpContext context, HyperVConsoleWebOptions options)
+{
+    if (string.IsNullOrWhiteSpace(options.ApiKey))
+    {
+        return true;
+    }
+
+    if (context.Request.Headers.TryGetValue("X-Console-Api-Key", out var header) && header == options.ApiKey)
+    {
+        return true;
+    }
+
+    return context.Request.Query.TryGetValue("apiKey", out var query) && query == options.ApiKey;
+}
+
+static bool IsAllowedVm(Guid id, HyperVConsoleWebOptions options)
+{
+    return options.AllowedVmIds.Count == 0 || options.AllowedVmIds.Contains(id);
+}
+
+static void EnsureAllowedVm(Guid id, HyperVConsoleWebOptions options)
+{
+    if (!IsAllowedVm(id, options))
+    {
+        throw new HyperVVirtualMachineNotFoundException(id);
     }
 }
 
@@ -297,6 +486,9 @@ static string GetHtml()
       <button data-key="right">Right</button>
       <button data-key="f8">F8</button>
       <button data-key="f12">F12</button>
+      <button data-key="alttab">Alt Tab</button>
+      <button data-key="winr">Win R</button>
+      <button data-key="ctrlshiftesc">Task Manager</button>
       <button class="danger" data-key="ctrlaltdel">Ctrl Alt Del</button>
       <span id="status" class="status">Disconnected</span>
     </header>
@@ -330,6 +522,7 @@ static string GetHtml()
       <button id="stop">Stop</button>
       <button id="reset" class="danger">Reset</button>
       <button id="enhanced">Enhanced</button>
+      <button id="audit">Audit</button>
     </footer>
   </main>
   <script>
@@ -337,11 +530,13 @@ static string GetHtml()
     const statusEl = document.getElementById('status');
     const canvas = document.getElementById('screen');
     const ctx = canvas.getContext('2d');
+    const apiKey = new URLSearchParams(location.search).get('apiKey') || localStorage.getItem('hypervConsoleApiKey') || '';
+    if (apiKey) localStorage.setItem('hypervConsoleApiKey', apiKey);
     let selected;
     let socket;
 
     async function loadVms() {
-      const vms = await fetch('/api/vms').then(r => r.json());
+      const vms = await apiFetch('/api/vms').then(r => r.json());
       list.replaceChildren(...vms.map(vm => {
         const button = document.createElement('button');
         button.className = 'vm';
@@ -368,6 +563,7 @@ static string GetHtml()
       const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
       const params = new URLSearchParams({ width, height, fps, idleFps, format, preset, tiles });
       if (maxBps) params.set('maxBps', maxBps);
+      if (apiKey) params.set('apiKey', apiKey);
       socket = new WebSocket(`${scheme}://${location.host}/ws/console/${vm.id}?${params}`);
       socket.binaryType = 'arraybuffer';
       socket.onopen = () => statusEl.textContent = `${vm.name} connected`;
@@ -390,8 +586,18 @@ static string GetHtml()
 
     async function post(path, body) {
       if (!selected) return;
-      await fetch(path.replace('{id}', selected.id), { method: 'POST', body });
+      const response = await apiFetch(path.replace('{id}', selected.id), { method: 'POST', body });
+      if (!response.ok) {
+        const problem = await response.json().catch(() => ({ error: response.statusText }));
+        statusEl.textContent = problem.error || problem.detail || response.statusText;
+      }
       setTimeout(loadVms, 500);
+    }
+
+    async function apiFetch(path, init = {}) {
+      init.headers = init.headers || {};
+      if (apiKey) init.headers['X-Console-Api-Key'] = apiKey;
+      return fetch(path, init);
     }
 
     document.querySelectorAll('[data-key]').forEach(button => {
@@ -404,6 +610,10 @@ static string GetHtml()
     document.getElementById('stop').onclick = () => post('/api/vms/{id}/stop');
     document.getElementById('reset').onclick = () => post('/api/vms/{id}/reset');
     document.getElementById('enhanced').onclick = () => post('/api/vms/{id}/enhanced-session');
+    document.getElementById('audit').onclick = async () => {
+      const events = await apiFetch('/api/audit').then(r => r.json());
+      statusEl.textContent = events.length ? `${events[0].action}: ${events[0].message}` : 'No audit events';
+    };
 
     function escapeHtml(value) {
       return value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -471,4 +681,37 @@ static string GetHtml()
 </body>
 </html>
 """;
+}
+
+public sealed class HyperVConsoleWebOptions
+{
+    public string ApiKey { get; set; } = "";
+    public List<Guid> AllowedVmIds { get; set; } = new();
+    public int MaxAuditEvents { get; set; } = 500;
+    public int? MaxWidth { get; set; } = 1024;
+    public int? MaxHeight { get; set; } = 768;
+    public double? MaxFramesPerSecond { get; set; } = 5;
+    public long? MaxBytesPerSecond { get; set; } = 500_000;
+    public ConsoleFramePixelFormat? MaxColorDepth { get; set; } = ConsoleFramePixelFormat.Rgb332;
+    public int? MaxConcurrentViewers { get; set; } = 3;
+    public bool AllowKeyboardInput { get; set; } = true;
+    public bool AllowMouseInput { get; set; } = true;
+    public bool AllowPowerControl { get; set; }
+
+    public HyperVConsolePolicy ToPolicy()
+    {
+        return new HyperVConsolePolicy
+        {
+            AllowCapture = true,
+            AllowKeyboardInput = AllowKeyboardInput,
+            AllowMouseInput = AllowMouseInput,
+            AllowPowerControl = AllowPowerControl,
+            MaxWidth = MaxWidth,
+            MaxHeight = MaxHeight,
+            MaxFramesPerSecond = MaxFramesPerSecond,
+            MaxBytesPerSecond = MaxBytesPerSecond,
+            MaxColorDepth = MaxColorDepth,
+            MaxConcurrentViewers = MaxConcurrentViewers
+        };
+    }
 }

@@ -5,7 +5,7 @@
     <RootNamespace>HyperVConsoleKit</RootNamespace>
     <AssemblyName>HyperVConsoleKit</AssemblyName>
     <PackageId>HyperVConsoleKit</PackageId>
-    <Version>0.2.0</Version>
+    <Version>0.3.0</Version>
     <Authors>HyperVConsoleKit</Authors>
     <Description>Host-side emergency Hyper-V VM console access toolkit.</Description>
     <PackageTags>Hyper-V;WMI;console;virtualization</PackageTags>
@@ -34,6 +34,12 @@
   <ItemGroup>
     <None Include="..\..\README.md" Pack="true" PackagePath="\" />
     <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+      <_Parameter1>HyperVConsoleKit.Tests</_Parameter1>
+    </AssemblyAttribute>
   </ItemGroup>
 
   <ItemGroup Condition="'$(TargetFramework)' == 'netstandard2.0'">

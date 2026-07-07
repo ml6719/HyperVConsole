@@ -44,7 +44,37 @@ namespace HyperVConsoleKit
 
         public Task RunAsync(CancellationToken cancellationToken)
         {
-            return _session.StreamFramesAsync(_options, PublishAsync, cancellationToken);
+            return RunCoreAsync(cancellationToken);
+        }
+
+        private async Task RunCoreAsync(CancellationToken cancellationToken)
+        {
+            Exception failure = null;
+            try
+            {
+                await _session.StreamFramesAsync(_options, PublishAsync, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                failure = ex;
+                throw;
+            }
+            finally
+            {
+                FrameHubSubscriber[] subscribers;
+                lock (_lock)
+                {
+                    subscribers = _subscribers.ToArray();
+                }
+
+                foreach (var subscriber in subscribers)
+                {
+                    subscriber.Complete(failure);
+                }
+            }
         }
 
         public async Task AddViewerAsync(Func<ConsoleFrame, CancellationToken, Task> onFrame, CancellationToken cancellationToken)
@@ -104,6 +134,8 @@ namespace HyperVConsoleKit
             private ConsoleFrame _latest;
             private bool _signalPending;
             private bool _disposed;
+            private bool _completed;
+            private Exception _failure;
 
             public FrameHubSubscriber(Func<ConsoleFrame, CancellationToken, Task> onFrame)
             {
@@ -135,16 +167,49 @@ namespace HyperVConsoleKit
                     await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
 
                     ConsoleFrame frame;
+                    Exception failure;
+                    bool completed;
                     lock (_lock)
                     {
                         frame = _latest;
                         _latest = null;
                         _signalPending = false;
+                        completed = _completed;
+                        failure = _failure;
+                    }
+
+                    if (completed)
+                    {
+                        if (failure != null)
+                        {
+                            throw failure;
+                        }
+
+                        return;
                     }
 
                     if (frame != null)
                     {
                         await _onFrame(frame, cancellationToken).ConfigureAwait(false);
+                    }
+                }
+            }
+
+            public void Complete(Exception failure)
+            {
+                lock (_lock)
+                {
+                    if (_disposed || _completed)
+                    {
+                        return;
+                    }
+
+                    _completed = true;
+                    _failure = failure;
+                    if (!_signalPending)
+                    {
+                        _signalPending = true;
+                        _signal.Release();
                     }
                 }
             }

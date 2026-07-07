@@ -21,6 +21,7 @@ It is not trying to replace RDP, VMConnect, ScreenConnect, TeamViewer, or a prop
 - Emit audit events for capture, input, session, and VM power actions.
 - Run structured diagnostics that can be uploaded by an agent.
 - Fan out one capture loop to multiple viewers while slow viewers drop stale frames.
+- Manage one shared console stream per VM with `HyperVConsoleSessionManager`.
 
 The core library targets:
 
@@ -379,6 +380,21 @@ var viewerTask = hub.AddViewerAsync(async (frame, cancellationToken) =>
 }, requestAborted);
 ```
 
+For an agent or web gateway, prefer the session manager. It keeps one stream hub per VM, reference-counts viewers, and shuts the stream down when the last viewer disconnects:
+
+```csharp
+var manager = new HyperVConsoleSessionManager(client, policy);
+
+await manager.AddViewerAsync(
+    vm.Id,
+    ConsoleFrameStreamOptions.CreatePreset(ConsoleStreamPreset.Balanced),
+    async (frame, cancellationToken) =>
+    {
+        await SendFullFrameToYourClient(frame, cancellationToken);
+    },
+    requestAborted);
+```
+
 ## Streaming Presets
 
 If you do not want to tune every knob yourself:
@@ -656,6 +672,38 @@ http://localhost:5088
 ```
 
 The web sample is intentionally just a sample. It is not production-ready remote access software.
+
+It does include practical gateway hooks in `appsettings.json`:
+
+```json
+{
+  "HyperVConsole": {
+    "ApiKey": "",
+    "AllowedVmIds": [],
+    "MaxWidth": 1024,
+    "MaxHeight": 768,
+    "MaxFramesPerSecond": 5,
+    "MaxBytesPerSecond": 500000,
+    "MaxColorDepth": "Rgb332",
+    "MaxConcurrentViewers": 3,
+    "AllowKeyboardInput": true,
+    "AllowMouseInput": true,
+    "AllowPowerControl": false
+  }
+}
+```
+
+If `ApiKey` is set, pass it as `?apiKey=...` in the browser or as `X-Console-Api-Key` for API calls. `AllowedVmIds` lets you expose only specific VMs.
+
+## Tests
+
+The test project covers logic that does not require Hyper-V:
+
+```powershell
+dotnet test HyperVConsoleKit.sln
+```
+
+Current tests cover pixel conversion, tile diffing, and policy clamping.
 
 ## WebSocket Frame Shape Used By The Sample
 
