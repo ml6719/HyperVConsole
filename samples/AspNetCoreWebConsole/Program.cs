@@ -40,7 +40,7 @@ app.MapPost("/api/vms/{id:guid}/reset", (Guid id) =>
 
 app.MapPost("/api/vms/{id:guid}/keys/{key}", (Guid id, string key) =>
 {
-    using var session = client.OpenConsole(id);
+    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
     SendKeyCommand(session, key);
     return Results.Ok();
 });
@@ -49,7 +49,7 @@ app.MapPost("/api/vms/{id:guid}/text", async (Guid id, HttpRequest request) =>
 {
     using var reader = new StreamReader(request.Body, Encoding.UTF8);
     var text = await reader.ReadToEndAsync();
-    using var session = client.OpenConsole(id);
+    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
     session.SendText(text);
     return Results.Ok();
 });
@@ -131,14 +131,17 @@ app.Map("/ws/console/{id:guid}", async (Guid id, HttpContext context) =>
     }
 
     using var socket = await context.WebSockets.AcceptWebSocketAsync();
-    using var session = client.OpenConsole(id);
+    using var session = client.OpenConsole(id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
 
     await session.StreamFramesAsync(options, async (frame, cancellationToken) =>
     {
         if (socket.State == WebSocketState.Open)
         {
             await SendConsoleFrameAsync(socket, frame, cancellationToken);
+            return;
         }
+
+        throw new OperationCanceledException();
     }, context.RequestAborted);
 });
 

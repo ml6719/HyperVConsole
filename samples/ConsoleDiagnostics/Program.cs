@@ -23,8 +23,11 @@ Run("Capabilities", () =>
 {
     var capabilities = client.GetConsoleCapabilities(vm.Id);
     Console.WriteLine($"  RawCapture: {capabilities.SupportsRawCapture}");
+    Console.WriteLine($"  CanCaptureNow: {capabilities.CanCaptureNow}");
     Console.WriteLine($"  Keyboard: {capabilities.SupportsKeyboardInput}");
+    Console.WriteLine($"  CanSendKeyboardNow: {capabilities.CanSendKeyboardInputNow}");
     Console.WriteLine($"  Mouse: {capabilities.SupportsMouseInput}");
+    Console.WriteLine($"  CanSendMouseNow: {capabilities.CanSendMouseInputNow}");
     Console.WriteLine($"  EnhancedSession: {capabilities.SupportsEnhancedSession}");
     Console.WriteLine($"  HostEnhancedSessionPolicy: {capabilities.HostEnhancedSessionPolicyEnabled}");
     Console.WriteLine($"  EnhancedTransport: {capabilities.EnhancedSessionTransportType}");
@@ -36,9 +39,16 @@ Run("Capabilities", () =>
 });
 
 using var session = client.OpenConsole(vm.Id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
+var currentCapabilities = client.GetConsoleCapabilities(vm.Id);
 
 Run("Capture 1024x768 RGB565", () =>
 {
+    if (!currentCapabilities.CanCaptureNow)
+    {
+        Console.WriteLine("  SKIP: VM cannot capture right now.");
+        return;
+    }
+
     var frame = session.CaptureFrame(new ConsoleFrameOptions { Width = 1024, Height = 768 });
     Expect(frame.RawBytes.Length == 1024 * 768 * 2, $"expected {1024 * 768 * 2} bytes, got {frame.RawBytes.Length}");
     Console.WriteLine($"  Bytes: {frame.RawBytes.Length}");
@@ -47,6 +57,12 @@ Run("Capture 1024x768 RGB565", () =>
 
 Run("Stream Rgb332 tile mode", () =>
 {
+    if (!currentCapabilities.CanCaptureNow)
+    {
+        Console.WriteLine("  SKIP: VM cannot stream right now.");
+        return;
+    }
+
     var frames = new List<ConsoleFrame>();
     using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(4));
     try
@@ -85,9 +101,9 @@ Run("Stream Rgb332 tile mode", () =>
 
 Run("Mouse move", () =>
 {
-    if (!vm.SupportsMouseInput)
+    if (!currentCapabilities.CanSendMouseInputNow)
     {
-        Console.WriteLine("  SKIP: no mouse device reported.");
+        Console.WriteLine("  SKIP: mouse input is not available right now.");
         return;
     }
 
@@ -98,6 +114,12 @@ Run("Mouse move", () =>
 
 Run("Keyboard input", () =>
 {
+    if (!currentCapabilities.CanSendKeyboardInputNow)
+    {
+        Console.WriteLine("  SKIP: keyboard input is not available right now.");
+        return;
+    }
+
     if (!sendInput)
     {
         Console.WriteLine("  SKIP: pass --send-input to send Enter.");

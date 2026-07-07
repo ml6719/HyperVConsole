@@ -104,9 +104,9 @@ foreach (var vm in vms)
     Console.WriteLine($"Id:        {vm.Id}");
     Console.WriteLine($"State:     {vm.State}");
     Console.WriteLine($"Running:   {vm.IsRunning}");
-    Console.WriteLine($"Capture:   {vm.SupportsConsoleCapture}");
-    Console.WriteLine($"Keyboard:  {vm.SupportsKeyboardInput}");
-    Console.WriteLine($"Mouse:     {vm.SupportsMouseInput}");
+    Console.WriteLine($"Capture:   {vm.SupportsConsoleCapture} / now: {vm.CanCaptureNow}");
+    Console.WriteLine($"Keyboard:  {vm.SupportsKeyboardInput} / now: {vm.CanSendKeyboardInputNow}");
+    Console.WriteLine($"Mouse:     {vm.SupportsMouseInput} / now: {vm.CanSendMouseInputNow}");
     Console.WriteLine($"Enhanced:  {vm.SupportsEnhancedSession}");
     Console.WriteLine($"Suggested: {vm.RecommendedConsoleMode}");
     Console.WriteLine();
@@ -126,8 +126,11 @@ var vm = client.GetVirtualMachines().First(v => v.Name == "Recovery VM");
 var caps = client.GetConsoleCapabilities(vm.Id);
 
 Console.WriteLine($"Raw capture:      {caps.SupportsRawCapture}");
+Console.WriteLine($"Can capture now:  {caps.CanCaptureNow}");
 Console.WriteLine($"Keyboard input:   {caps.SupportsKeyboardInput}");
+Console.WriteLine($"Can type now:     {caps.CanSendKeyboardInputNow}");
 Console.WriteLine($"Mouse input:      {caps.SupportsMouseInput}");
+Console.WriteLine($"Can mouse now:    {caps.CanSendMouseInputNow}");
 Console.WriteLine($"Enhanced session: {caps.SupportsEnhancedSession}");
 Console.WriteLine($"Recommended mode: {caps.RecommendedMode}");
 
@@ -419,7 +422,7 @@ Mouse support is best-effort. Some VMs expose a synthetic mouse, some do not, an
 ```csharp
 var caps = client.GetConsoleCapabilities(vm.Id);
 
-if (caps.SupportsMouseInput)
+if (caps.CanSendMouseInputNow)
 {
     using var session = client.OpenConsole(vm.Id);
 

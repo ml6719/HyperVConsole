@@ -149,8 +149,11 @@ namespace HyperVConsoleKit
         public bool IsRunning { get; set; }
         public bool IsPaused { get; set; }
         public bool SupportsConsoleCapture { get; set; }
+        public bool CanCaptureNow { get; set; }
         public bool SupportsKeyboardInput { get; set; }
+        public bool CanSendKeyboardInputNow { get; set; }
         public bool SupportsMouseInput { get; set; }
+        public bool CanSendMouseInputNow { get; set; }
         public bool SupportsEnhancedSession { get; set; }
         public HyperVConsoleMode RecommendedConsoleMode { get; set; }
     }
@@ -165,8 +168,11 @@ namespace HyperVConsoleKit
         public Guid VirtualMachineId { get; set; }
         public string VirtualMachineName { get; set; }
         public bool SupportsRawCapture { get; set; }
+        public bool CanCaptureNow { get; set; }
         public bool SupportsKeyboardInput { get; set; }
+        public bool CanSendKeyboardInputNow { get; set; }
         public bool SupportsMouseInput { get; set; }
+        public bool CanSendMouseInputNow { get; set; }
         public bool SupportsEnhancedSession { get; set; }
         public bool HostEnhancedSessionPolicyEnabled { get; set; }
         public HyperVEnhancedSessionTransportType EnhancedSessionTransportType { get; set; }

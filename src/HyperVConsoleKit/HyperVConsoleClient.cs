@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Management;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -14,6 +15,7 @@ namespace HyperVConsoleKit
         internal const string NamespacePath = @"root\virtualization\v2";
         private readonly ManagementScope _scope;
         private readonly object _wmiLock = new object();
+        private static readonly TimeSpan DefaultJobTimeout = TimeSpan.FromMinutes(5);
 
         public HyperVConsoleClient() : this(NamespacePath)
         {
@@ -81,8 +83,7 @@ namespace HyperVConsoleKit
                 options = new HyperVConsoleOpenOptions();
             }
 
-            var capabilities = GetConsoleCapabilities(virtualMachineId);
-            var mode = options.Mode == HyperVConsoleMode.Auto ? capabilities.RecommendedMode : options.Mode;
+            var mode = options.Mode == HyperVConsoleMode.Auto ? HyperVConsoleMode.RawHostConsole : options.Mode;
             if (mode == HyperVConsoleMode.EnhancedSession)
             {
                 throw new HyperVConsoleException("Enhanced Session is detected and can be launched through VMConnect, but programmatic frame streaming and input injection are only implemented for RawHostConsole mode.");
@@ -190,7 +191,7 @@ namespace HyperVConsoleKit
 
             if (returnCode == WmiReturnCode.Started)
             {
-                WaitForJob(wmiClass, methodName, outParams, scope);
+                WaitForJob(wmiClass, methodName, outParams, scope, DefaultJobTimeout);
                 return;
             }
 
@@ -202,7 +203,7 @@ namespace HyperVConsoleKit
             throw new HyperVWmiException(wmiClass, methodName, returnCode);
         }
 
-        private static void WaitForJob(string wmiClass, string methodName, ManagementBaseObject outParams, ManagementScope scope)
+        private static void WaitForJob(string wmiClass, string methodName, ManagementBaseObject outParams, ManagementScope scope, TimeSpan timeout)
         {
             var jobPath = outParams["Job"] as string;
             if (string.IsNullOrEmpty(jobPath))
@@ -212,8 +213,14 @@ namespace HyperVConsoleKit
 
             using (var job = new ManagementObject(scope, new ManagementPath(jobPath), null))
             {
+                var deadline = DateTime.UtcNow.Add(timeout);
                 while (true)
                 {
+                    if (DateTime.UtcNow > deadline)
+                    {
+                        throw new HyperVConsoleException(string.Format("Timed out waiting for Hyper-V WMI job. Class={0}, Method={1}, Timeout={2}.", wmiClass, methodName, timeout));
+                    }
+
                     job.Get();
                     var state = Convert.ToUInt16(job["JobState"]);
                     if (state == 7)
@@ -249,8 +256,11 @@ namespace HyperVConsoleKit
                 IsRunning = stateValue == 2,
                 IsPaused = stateValue == 9 || stateValue == 32776,
                 SupportsConsoleCapture = capabilities.SupportsRawCapture,
+                CanCaptureNow = capabilities.CanCaptureNow,
                 SupportsKeyboardInput = capabilities.SupportsKeyboardInput,
+                CanSendKeyboardInputNow = capabilities.CanSendKeyboardInputNow,
                 SupportsMouseInput = capabilities.SupportsMouseInput,
+                CanSendMouseInputNow = capabilities.CanSendMouseInputNow,
                 SupportsEnhancedSession = capabilities.SupportsEnhancedSession,
                 RecommendedConsoleMode = capabilities.RecommendedMode
             };
@@ -260,10 +270,22 @@ namespace HyperVConsoleKit
         {
             var vmId = Guid.Parse((string)vm["Name"]);
             var vmName = (string)vm["ElementName"];
+            var stateValue = Convert.ToUInt16(vm["EnabledState"]);
+            var isRunning = stateValue == 2;
             var enhancedTransport = GetEnhancedSessionTransportType(vm);
             var hostEnhancedSessionEnabled = GetHostEnhancedSessionPolicy();
-            var hasSyntheticMouse = GetFirstRelatedObject(vm, "Msvm_SyntheticMouse", "Msvm_SystemDevice", "PartComponent", "GroupComponent") != null;
+            bool hasSyntheticMouse;
+            using (var mouse = GetFirstRelatedObject(vm, "Msvm_SyntheticMouse", "Msvm_SystemDevice", "PartComponent", "GroupComponent"))
+            {
+                hasSyntheticMouse = mouse != null;
+            }
+
             var limitations = new List<string>();
+            if (!isRunning)
+            {
+                limitations.Add("VM is not running; capture and input are not available right now.");
+            }
+
             if (!hostEnhancedSessionEnabled)
             {
                 limitations.Add("Host Enhanced Session Mode policy is disabled.");
@@ -282,8 +304,11 @@ namespace HyperVConsoleKit
                 VirtualMachineId = vmId,
                 VirtualMachineName = vmName,
                 SupportsRawCapture = true,
+                CanCaptureNow = isRunning,
                 SupportsKeyboardInput = true,
+                CanSendKeyboardInputNow = isRunning,
                 SupportsMouseInput = hasSyntheticMouse,
+                CanSendMouseInputNow = isRunning && hasSyntheticMouse,
                 SupportsEnhancedSession = supportsEnhanced,
                 HostEnhancedSessionPolicyEnabled = hostEnhancedSessionEnabled,
                 EnhancedSessionTransportType = enhancedTransport,
@@ -572,14 +597,49 @@ namespace HyperVConsoleKit
                 return;
             }
 
-            foreach (var key in keys)
+            lock (_wmiLock)
             {
-                SendKeyDown(key);
-            }
+                var pressed = new List<ConsoleKeyCode>();
+                ExceptionDispatchInfo chordFailure = null;
+                ExceptionDispatchInfo releaseFailure = null;
 
-            for (var index = keys.Length - 1; index >= 0; index--)
-            {
-                SendKeyUp(keys[index]);
+                try
+                {
+                    foreach (var key in keys)
+                    {
+                        SendKeyDown(key);
+                        pressed.Add(key);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    chordFailure = ExceptionDispatchInfo.Capture(ex);
+                }
+
+                for (var index = pressed.Count - 1; index >= 0; index--)
+                {
+                    try
+                    {
+                        SendKeyUp(pressed[index]);
+                    }
+                    catch (Exception ex)
+                    {
+                        if (releaseFailure == null)
+                        {
+                            releaseFailure = ExceptionDispatchInfo.Capture(ex);
+                        }
+                    }
+                }
+
+                if (chordFailure != null)
+                {
+                    chordFailure.Throw();
+                }
+
+                if (releaseFailure != null)
+                {
+                    releaseFailure.Throw();
+                }
             }
         }
 
@@ -671,6 +731,11 @@ namespace HyperVConsoleKit
                         return false;
                     }
 
+                    if (!HasMethod(mouse, "SetAbsolutePosition"))
+                    {
+                        return false;
+                    }
+
                     using (var inParams = mouse.GetMethodParameters("SetAbsolutePosition"))
                     {
                         inParams["HorizontalPosition"] = ClampMousePosition(x);
@@ -690,61 +755,72 @@ namespace HyperVConsoleKit
 
         public Task<bool> TrySendMouseMoveAsync(int x, int y, CancellationToken cancellationToken)
         {
-            return Task.FromResult(TrySendMouseMove(x, y));
+            return Task.Run(() => TrySendMouseMove(x, y), cancellationToken);
         }
 
         public bool TrySendMouseClick(int x, int y, MouseButton button)
         {
             ThrowIfDisposed();
-            try
+            lock (_wmiLock)
             {
-                if (!TrySendMouseMove(x, y))
+                try
                 {
-                    return false;
-                }
-
-                using (var mouse = GetMouseObject())
-                {
-                    if (mouse == null)
+                    if (!TrySendMouseMove(x, y))
                     {
                         return false;
                     }
 
-                    using (var inParams = mouse.GetMethodParameters("ClickButton"))
+                    using (var mouse = GetMouseObject())
                     {
-                        inParams["ButtonIndex"] = (ushort)button;
-                        using (var outParams = mouse.InvokeMethod("ClickButton", inParams, null))
+                        if (mouse == null)
                         {
-                            return IsSuccessfulMouseReturn(outParams);
+                            return false;
+                        }
+
+                        if (!HasMethod(mouse, "ClickButton"))
+                        {
+                            return false;
+                        }
+
+                        using (var inParams = mouse.GetMethodParameters("ClickButton"))
+                        {
+                            inParams["ButtonIndex"] = (ushort)button;
+                            using (var outParams = mouse.InvokeMethod("ClickButton", inParams, null))
+                            {
+                                return IsSuccessfulMouseReturn(outParams);
+                            }
                         }
                     }
                 }
-            }
-            catch (ManagementException)
-            {
-                return false;
+                catch (ManagementException)
+                {
+                    return false;
+                }
             }
         }
 
         public Task<bool> TrySendMouseClickAsync(int x, int y, MouseButton button, CancellationToken cancellationToken)
         {
-            return Task.FromResult(TrySendMouseClick(x, y, button));
+            return Task.Run(() => TrySendMouseClick(x, y, button), cancellationToken);
         }
 
         public bool TrySendMouseDoubleClick(int x, int y, MouseButton button)
         {
-            if (!TrySendMouseClick(x, y, button))
+            lock (_wmiLock)
             {
-                return false;
-            }
+                if (!TrySendMouseClick(x, y, button))
+                {
+                    return false;
+                }
 
-            System.Threading.Thread.Sleep(100);
-            return TrySendMouseClick(x, y, button);
+                System.Threading.Thread.Sleep(100);
+                return TrySendMouseClick(x, y, button);
+            }
         }
 
         public Task<bool> TrySendMouseDoubleClickAsync(int x, int y, MouseButton button, CancellationToken cancellationToken)
         {
-            return Task.FromResult(TrySendMouseDoubleClick(x, y, button));
+            return Task.Run(() => TrySendMouseDoubleClick(x, y, button), cancellationToken);
         }
 
         public void Dispose()
@@ -796,6 +872,21 @@ namespace HyperVConsoleKit
                     return GetFirstRelatedObject(vm, "Msvm_SyntheticMouse", "Msvm_SystemDevice", "PartComponent", "GroupComponent")
                         ?? GetFirstRelatedObject(vm, "Msvm_Ps2Mouse", "Msvm_SystemDevice", "PartComponent", "GroupComponent");
                 }
+            }
+        }
+
+        private static bool HasMethod(ManagementObject managementObject, string methodName)
+        {
+            try
+            {
+                using (managementObject.GetMethodParameters(methodName))
+                {
+                    return true;
+                }
+            }
+            catch (ManagementException)
+            {
+                return false;
             }
         }
 
