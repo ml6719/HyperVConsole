@@ -6,6 +6,13 @@ using System.Threading.Tasks;
 
 namespace HyperVConsoleKit
 {
+    /// <summary>
+    /// Fans out one console stream to multiple viewers.
+    /// </summary>
+    /// <remarks>
+    /// The hub runs one producer stream from an <see cref="IHyperVConsoleSession"/> and gives each viewer
+    /// a latest-frame queue. Slow viewers drop stale frames independently instead of blocking other viewers.
+    /// </remarks>
     public sealed class HyperVConsoleFrameHub
     {
         private readonly IHyperVConsoleSession _session;
@@ -14,11 +21,17 @@ namespace HyperVConsoleKit
         private readonly object _lock = new object();
         private readonly List<FrameHubSubscriber> _subscribers = new List<FrameHubSubscriber>();
 
+        /// <summary>
+        /// Creates a frame hub with no explicit viewer limit.
+        /// </summary>
         public HyperVConsoleFrameHub(IHyperVConsoleSession session, ConsoleFrameStreamOptions options)
             : this(session, options, null)
         {
         }
 
+        /// <summary>
+        /// Creates a frame hub with an optional maximum viewer count.
+        /// </summary>
         public HyperVConsoleFrameHub(IHyperVConsoleSession session, ConsoleFrameStreamOptions options, int? maxViewers)
         {
             if (session == null)
@@ -31,6 +44,9 @@ namespace HyperVConsoleKit
             _maxViewers = maxViewers;
         }
 
+        /// <summary>
+        /// Gets the number of viewers currently attached to this hub.
+        /// </summary>
         public int ViewerCount
         {
             get
@@ -42,6 +58,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Runs the producer stream until cancellation, completion, or failure.
+        /// </summary>
         public Task RunAsync(CancellationToken cancellationToken)
         {
             return RunCoreAsync(cancellationToken);
@@ -77,6 +96,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Adds a viewer callback that receives the latest available frames until cancellation or hub completion.
+        /// </summary>
         public async Task AddViewerAsync(Func<ConsoleFrame, CancellationToken, Task> onFrame, CancellationToken cancellationToken)
         {
             if (onFrame == null)

@@ -10,6 +10,13 @@ using System.Threading.Tasks;
 
 namespace HyperVConsoleKit
 {
+    /// <summary>
+    /// Host-side client for enumerating local Hyper-V VMs, opening raw console sessions, running diagnostics, and controlling VM power state.
+    /// </summary>
+    /// <remarks>
+    /// The client uses the local Hyper-V WMI provider at root\virtualization\v2 and must run on the Hyper-V host
+    /// with sufficient privileges, typically elevated or as LocalSystem.
+    /// </remarks>
     public sealed class HyperVConsoleClient
     {
         internal const string NamespacePath = @"root\virtualization\v2";
@@ -17,22 +24,37 @@ namespace HyperVConsoleKit
         private readonly object _wmiLock = new object();
         private readonly HyperVConsolePolicy _policy;
         private static readonly TimeSpan DefaultJobTimeout = TimeSpan.FromMinutes(5);
+        /// <summary>
+        /// Raised for auditable actions performed by the client or sessions opened by this client.
+        /// </summary>
         public event EventHandler<HyperVConsoleAuditEvent> Activity;
 
+        /// <summary>
+        /// Creates a client connected to the default local Hyper-V WMI namespace.
+        /// </summary>
         public HyperVConsoleClient() : this(NamespacePath)
         {
         }
 
+        /// <summary>
+        /// Creates a client connected to a specific Hyper-V WMI namespace.
+        /// </summary>
         public HyperVConsoleClient(string namespacePath)
             : this(namespacePath, null)
         {
         }
 
+        /// <summary>
+        /// Creates a client with a default console policy.
+        /// </summary>
         public HyperVConsoleClient(HyperVConsolePolicy policy)
             : this(NamespacePath, policy)
         {
         }
 
+        /// <summary>
+        /// Creates a client connected to a specific Hyper-V WMI namespace with a default console policy.
+        /// </summary>
         public HyperVConsoleClient(string namespacePath, HyperVConsolePolicy policy)
         {
             _policy = policy ?? new HyperVConsolePolicy();
@@ -40,6 +62,9 @@ namespace HyperVConsoleKit
             _scope.Connect();
         }
 
+        /// <summary>
+        /// Enumerates local Hyper-V virtual machines and their current console capabilities.
+        /// </summary>
         public IReadOnlyList<HyperVVirtualMachine> GetVirtualMachines()
         {
             try
@@ -63,11 +88,17 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Enumerates local Hyper-V virtual machines on a worker thread.
+        /// </summary>
         public Task<IReadOnlyList<HyperVVirtualMachine>> GetVirtualMachinesAsync(CancellationToken cancellationToken)
         {
             return RunAsync(() => GetVirtualMachines(), cancellationToken);
         }
 
+        /// <summary>
+        /// Gets one local Hyper-V VM by id.
+        /// </summary>
         public HyperVVirtualMachine GetVirtualMachine(Guid id)
         {
             lock (_wmiLock)
@@ -79,16 +110,29 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Gets one local Hyper-V VM by id on a worker thread.
+        /// </summary>
         public Task<HyperVVirtualMachine> GetVirtualMachineAsync(Guid id, CancellationToken cancellationToken)
         {
             return RunAsync(() => GetVirtualMachine(id), cancellationToken);
         }
 
+        /// <summary>
+        /// Opens a raw host console session for a VM.
+        /// </summary>
         public IHyperVConsoleSession OpenConsole(Guid virtualMachineId)
         {
             return OpenConsole(virtualMachineId, new HyperVConsoleOpenOptions());
         }
 
+        /// <summary>
+        /// Opens a console session for a VM using the supplied options.
+        /// </summary>
+        /// <remarks>
+        /// Programmatic capture and input are implemented for RawHostConsole. Enhanced Session can be detected
+        /// and launched through VMConnect, but is not headlessly streamed by this library.
+        /// </remarks>
         public IHyperVConsoleSession OpenConsole(Guid virtualMachineId, HyperVConsoleOpenOptions options)
         {
             if (options == null)
@@ -108,6 +152,9 @@ namespace HyperVConsoleKit
             return session;
         }
 
+        /// <summary>
+        /// Gets supported and currently available console capabilities for a VM.
+        /// </summary>
         public HyperVConsoleCapabilities GetConsoleCapabilities(Guid virtualMachineId)
         {
             lock (_wmiLock)
@@ -119,6 +166,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Gets information about launching VMConnect for Enhanced Session access.
+        /// </summary>
         public HyperVEnhancedSessionLaunchInfo GetEnhancedSessionLaunchInfo(Guid virtualMachineId)
         {
             var vm = GetVirtualMachine(virtualMachineId);
@@ -135,6 +185,9 @@ namespace HyperVConsoleKit
             };
         }
 
+        /// <summary>
+        /// Attempts to launch VMConnect for an Enhanced Session.
+        /// </summary>
         public bool TryLaunchEnhancedSession(Guid virtualMachineId)
         {
             var launchInfo = GetEnhancedSessionLaunchInfo(virtualMachineId);
@@ -152,6 +205,9 @@ namespace HyperVConsoleKit
             return true;
         }
 
+        /// <summary>
+        /// Requests that Hyper-V start the VM.
+        /// </summary>
         public void StartVirtualMachine(Guid virtualMachineId)
         {
             _policy.EnsurePowerControlAllowed();
@@ -159,11 +215,17 @@ namespace HyperVConsoleKit
             RaiseActivity(virtualMachineId, HyperVConsoleAuditAction.VirtualMachineStarted, true, "VM start requested.", null);
         }
 
+        /// <summary>
+        /// Requests that Hyper-V start the VM on a worker thread.
+        /// </summary>
         public Task StartVirtualMachineAsync(Guid virtualMachineId, CancellationToken cancellationToken)
         {
             return RunAsync(() => StartVirtualMachine(virtualMachineId), cancellationToken);
         }
 
+        /// <summary>
+        /// Requests that Hyper-V stop the VM.
+        /// </summary>
         public void StopVirtualMachine(Guid virtualMachineId, bool force)
         {
             _policy.EnsurePowerControlAllowed();
@@ -171,11 +233,17 @@ namespace HyperVConsoleKit
             RaiseActivity(virtualMachineId, HyperVConsoleAuditAction.VirtualMachineStopped, true, force ? "VM force stop requested." : "VM stop requested.", null);
         }
 
+        /// <summary>
+        /// Requests that Hyper-V stop the VM on a worker thread.
+        /// </summary>
         public Task StopVirtualMachineAsync(Guid virtualMachineId, bool force, CancellationToken cancellationToken)
         {
             return RunAsync(() => StopVirtualMachine(virtualMachineId, force), cancellationToken);
         }
 
+        /// <summary>
+        /// Requests that Hyper-V reset the VM.
+        /// </summary>
         public void ResetVirtualMachine(Guid virtualMachineId)
         {
             _policy.EnsurePowerControlAllowed();
@@ -183,6 +251,9 @@ namespace HyperVConsoleKit
             RaiseActivity(virtualMachineId, HyperVConsoleAuditAction.VirtualMachineReset, true, "VM reset requested.", null);
         }
 
+        /// <summary>
+        /// Requests that Hyper-V reset the VM on a worker thread.
+        /// </summary>
         public Task ResetVirtualMachineAsync(Guid virtualMachineId, CancellationToken cancellationToken)
         {
             return RunAsync(() => ResetVirtualMachine(virtualMachineId), cancellationToken);
@@ -421,6 +492,9 @@ namespace HyperVConsoleKit
             return Task.Run(action, cancellationToken);
         }
 
+        /// <summary>
+        /// Runs structured console diagnostics for a VM.
+        /// </summary>
         public HyperVConsoleDiagnosticReport RunDiagnostics(Guid virtualMachineId)
         {
             var items = new List<HyperVConsoleDiagnosticItem>();
@@ -456,6 +530,9 @@ namespace HyperVConsoleKit
             };
         }
 
+        /// <summary>
+        /// Runs structured console diagnostics for a VM on a worker thread.
+        /// </summary>
         public Task<HyperVConsoleDiagnosticReport> RunDiagnosticsAsync(Guid virtualMachineId, CancellationToken cancellationToken)
         {
             return RunAsync(() => RunDiagnostics(virtualMachineId), cancellationToken);

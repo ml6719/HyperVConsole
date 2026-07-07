@@ -31,6 +31,8 @@ The core library targets:
 
 That means it is compatible with modern .NET on Windows, including .NET Core/.NET services that can consume `netstandard2.0`, plus .NET 8 Windows apps and services. It is not cross-platform .NET because Hyper-V console capture and input are Windows-only WMI APIs.
 
+The NuGet package includes XML documentation for IntelliSense and generated API documentation.
+
 ## How It Works
 
 The raw emergency console path uses the Hyper-V WMI provider:

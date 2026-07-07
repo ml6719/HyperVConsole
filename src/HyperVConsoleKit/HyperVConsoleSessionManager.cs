@@ -5,6 +5,13 @@ using System.Threading.Tasks;
 
 namespace HyperVConsoleKit
 {
+    /// <summary>
+    /// Manages shared per-VM console streams for agent and web-gateway scenarios.
+    /// </summary>
+    /// <remarks>
+    /// The manager creates one frame hub per VM, reference-counts viewers, and disposes the
+    /// underlying console session when the last viewer disconnects.
+    /// </remarks>
     public sealed class HyperVConsoleSessionManager : IDisposable
     {
         private readonly HyperVConsoleClient _client;
@@ -13,11 +20,17 @@ namespace HyperVConsoleKit
         private readonly Dictionary<Guid, ManagedConsoleSession> _sessions = new Dictionary<Guid, ManagedConsoleSession>();
         private bool _disposed;
 
+        /// <summary>
+        /// Creates a session manager using the client's default policy.
+        /// </summary>
         public HyperVConsoleSessionManager(HyperVConsoleClient client)
             : this(client, null)
         {
         }
 
+        /// <summary>
+        /// Creates a session manager with an explicit policy applied to managed sessions.
+        /// </summary>
         public HyperVConsoleSessionManager(HyperVConsoleClient client, HyperVConsolePolicy policy)
         {
             if (client == null)
@@ -29,6 +42,9 @@ namespace HyperVConsoleKit
             _policy = policy ?? new HyperVConsolePolicy();
         }
 
+        /// <summary>
+        /// Gets the number of VM console streams currently managed.
+        /// </summary>
         public int ActiveSessionCount
         {
             get
@@ -40,6 +56,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Gets the number of active viewers for a VM.
+        /// </summary>
         public int GetViewerCount(Guid virtualMachineId)
         {
             lock (_lock)
@@ -49,6 +68,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Adds a viewer to the shared stream for a VM, creating the stream if needed.
+        /// </summary>
         public async Task AddViewerAsync(Guid virtualMachineId, ConsoleFrameStreamOptions options, Func<ConsoleFrame, CancellationToken, Task> onFrame, CancellationToken cancellationToken)
         {
             ThrowIfDisposed();
@@ -74,6 +96,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Stops and removes the managed stream for a VM, if one exists.
+        /// </summary>
         public void Stop(Guid virtualMachineId)
         {
             ManagedConsoleSession managed = null;
@@ -91,6 +116,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Stops all managed streams and releases their console sessions.
+        /// </summary>
         public void Dispose()
         {
             if (_disposed)

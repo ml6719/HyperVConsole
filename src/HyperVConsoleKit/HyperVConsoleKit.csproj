@@ -5,7 +5,7 @@
     <RootNamespace>HyperVConsoleKit</RootNamespace>
     <AssemblyName>HyperVConsoleKit</AssemblyName>
     <PackageId>HyperVConsoleKit</PackageId>
-    <Version>0.3.0</Version>
+    <Version>0.3.1</Version>
     <Authors>HyperVConsoleKit</Authors>
     <Description>Host-side emergency Hyper-V VM console access toolkit.</Description>
     <PackageTags>Hyper-V;WMI;console;virtualization</PackageTags>
@@ -18,6 +18,8 @@
     <Deterministic>true</Deterministic>
     <IncludeSymbols>true</IncludeSymbols>
     <SymbolPackageFormat>snupkg</SymbolPackageFormat>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>disable</Nullable>
     <LangVersion>latest</LangVersion>

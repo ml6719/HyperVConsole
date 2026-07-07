@@ -5,6 +5,13 @@ using System.Threading.Tasks;
 
 namespace HyperVConsoleKit
 {
+    /// <summary>
+    /// Pixel formats that can be returned by the console streaming pipeline.
+    /// </summary>
+    /// <remarks>
+    /// Single-frame capture always starts as raw RGB565 from Hyper-V. Streaming can keep RGB565
+    /// or reduce the frame to a lower color depth to trade quality for latency and bandwidth.
+    /// </remarks>
     public enum ConsoleFramePixelFormat
     {
         Rgb565 = 0,
@@ -14,12 +21,18 @@ namespace HyperVConsoleKit
         Mono1 = 4
     }
 
+    /// <summary>
+    /// Describes whether a streamed console frame contains a complete image or changed tiles only.
+    /// </summary>
     public enum ConsoleFrameUpdateKind
     {
         FullFrame = 0,
         ChangedTiles = 1
     }
 
+    /// <summary>
+    /// Named streaming presets for common latency, bandwidth, and quality tradeoffs.
+    /// </summary>
     public enum ConsoleStreamPreset
     {
         Custom = 0,
@@ -29,6 +42,9 @@ namespace HyperVConsoleKit
         Quality = 4
     }
 
+    /// <summary>
+    /// Console transport mode requested when opening a VM console session.
+    /// </summary>
     public enum HyperVConsoleMode
     {
         Auto = 0,
@@ -36,6 +52,9 @@ namespace HyperVConsoleKit
         EnhancedSession = 2
     }
 
+    /// <summary>
+    /// Hyper-V Enhanced Session transport advertised by the VM configuration.
+    /// </summary>
     public enum HyperVEnhancedSessionTransportType
     {
         Vmbus = 0,
@@ -43,6 +62,9 @@ namespace HyperVConsoleKit
         Unknown = 65535
     }
 
+    /// <summary>
+    /// Common Hyper-V virtual machine states reported by Msvm_ComputerSystem.EnabledState.
+    /// </summary>
     public enum HyperVVirtualMachineState
     {
         Unknown = 0,
@@ -61,6 +83,9 @@ namespace HyperVConsoleKit
         FastSaving = 32780
     }
 
+    /// <summary>
+    /// Windows virtual-key codes accepted by the Hyper-V virtual keyboard WMI device.
+    /// </summary>
     public enum ConsoleKeyCode : uint
     {
         Backspace = 0x08,
@@ -135,6 +160,9 @@ namespace HyperVConsoleKit
         F12 = 0x7B
     }
 
+    /// <summary>
+    /// Mouse button identifiers used by the synthetic mouse helpers.
+    /// </summary>
     public enum MouseButton
     {
         Left = 0,
@@ -142,6 +170,9 @@ namespace HyperVConsoleKit
         Middle = 2
     }
 
+    /// <summary>
+    /// High-level action names emitted by client and session audit events.
+    /// </summary>
     public enum HyperVConsoleAuditAction
     {
         SessionOpened = 0,
@@ -162,6 +193,9 @@ namespace HyperVConsoleKit
         EnhancedSessionLaunchRequested = 15
     }
 
+    /// <summary>
+    /// Status values used by structured diagnostics.
+    /// </summary>
     public enum HyperVConsoleDiagnosticStatus
     {
         Pass = 0,
@@ -170,6 +204,9 @@ namespace HyperVConsoleKit
         Skipped = 3
     }
 
+    /// <summary>
+    /// Snapshot of a local Hyper-V VM and its console-related capabilities.
+    /// </summary>
     public sealed class HyperVVirtualMachine
     {
         public Guid Id { get; set; }
@@ -188,12 +225,23 @@ namespace HyperVConsoleKit
         public HyperVConsoleMode RecommendedConsoleMode { get; set; }
     }
 
+    /// <summary>
+    /// Options used when opening a raw Hyper-V console session.
+    /// </summary>
     public sealed class HyperVConsoleOpenOptions
     {
         public HyperVConsoleMode Mode { get; set; } = HyperVConsoleMode.Auto;
         public HyperVConsolePolicy Policy { get; set; }
     }
 
+    /// <summary>
+    /// Describes supported and currently available console features for a VM.
+    /// </summary>
+    /// <remarks>
+    /// Support flags describe whether a feature exists in principle. The corresponding
+    /// Can...Now flags describe whether the feature is usable at this moment, for example
+    /// only while the VM is running.
+    /// </remarks>
     public sealed class HyperVConsoleCapabilities
     {
         public Guid VirtualMachineId { get; set; }
@@ -211,6 +259,9 @@ namespace HyperVConsoleKit
         public string[] Limitations { get; set; }
     }
 
+    /// <summary>
+    /// Information needed to launch VMConnect for an Enhanced Session.
+    /// </summary>
     public sealed class HyperVEnhancedSessionLaunchInfo
     {
         public Guid VirtualMachineId { get; set; }
@@ -222,6 +273,13 @@ namespace HyperVConsoleKit
         public string Limitation { get; set; }
     }
 
+    /// <summary>
+    /// Policy limits and permissions applied to console sessions and agent-style gateways.
+    /// </summary>
+    /// <remarks>
+    /// Policy can disable capture, input, or power control and can clamp stream options such as
+    /// resolution, frame rate, byte rate, color depth, and concurrent viewers.
+    /// </remarks>
     public sealed class HyperVConsolePolicy
     {
         public bool AllowCapture { get; set; } = true;
@@ -236,6 +294,9 @@ namespace HyperVConsoleKit
         public int? MaxConcurrentViewers { get; set; }
         public TimeSpan? IdleTimeout { get; set; }
 
+        /// <summary>
+        /// Applies resolution limits to single-frame capture options.
+        /// </summary>
         public void ApplyTo(ConsoleFrameOptions options)
         {
             if (options == null)
@@ -254,6 +315,9 @@ namespace HyperVConsoleKit
             }
         }
 
+        /// <summary>
+        /// Applies resolution, frame-rate, byte-rate, and color-depth limits to stream options.
+        /// </summary>
         public void ApplyTo(ConsoleFrameStreamOptions options)
         {
             if (options == null)
@@ -336,6 +400,9 @@ namespace HyperVConsoleKit
         }
     }
 
+    /// <summary>
+    /// Audit event emitted for console session, frame, input, and power actions.
+    /// </summary>
     public sealed class HyperVConsoleAuditEvent
     {
         public DateTime TimestampUtc { get; set; }
@@ -347,6 +414,9 @@ namespace HyperVConsoleKit
         public string UserName { get; set; }
     }
 
+    /// <summary>
+    /// One diagnostic check result in a console diagnostics report.
+    /// </summary>
     public sealed class HyperVConsoleDiagnosticItem
     {
         public string Name { get; set; }
@@ -354,6 +424,9 @@ namespace HyperVConsoleKit
         public string Message { get; set; }
     }
 
+    /// <summary>
+    /// Structured diagnostics for a VM console, suitable for JSON APIs and agent telemetry.
+    /// </summary>
     public sealed class HyperVConsoleDiagnosticReport
     {
         public Guid VirtualMachineId { get; set; }
@@ -365,6 +438,9 @@ namespace HyperVConsoleKit
         public HyperVConsoleDiagnosticStatus OverallStatus { get; set; }
     }
 
+    /// <summary>
+    /// Timing and line-ending options for paste-as-keystrokes input.
+    /// </summary>
     public sealed class ConsolePasteOptions
     {
         public int DelayBetweenCharactersMs { get; set; } = 10;
@@ -372,12 +448,18 @@ namespace HyperVConsoleKit
         public bool ConvertLineEndingsToEnter { get; set; } = true;
     }
 
+    /// <summary>
+    /// Options for a single console frame capture.
+    /// </summary>
     public sealed class ConsoleFrameOptions
     {
         public int Width { get; set; } = 1024;
         public int Height { get; set; } = 768;
     }
 
+    /// <summary>
+    /// Options for continuous console frame streaming.
+    /// </summary>
     public sealed class ConsoleFrameStreamOptions
     {
         public int Width { get; set; } = 1024;
@@ -396,6 +478,9 @@ namespace HyperVConsoleKit
         public int ActiveChangeThresholdBytes { get; set; } = 4096;
         public ConsoleStreamPreset Preset { get; set; } = ConsoleStreamPreset.Custom;
 
+        /// <summary>
+        /// Creates a stream options instance from one of the built-in presets.
+        /// </summary>
         public static ConsoleFrameStreamOptions CreatePreset(ConsoleStreamPreset preset)
         {
             var options = new ConsoleFrameStreamOptions { Preset = preset };
@@ -445,6 +530,9 @@ namespace HyperVConsoleKit
         }
     }
 
+    /// <summary>
+    /// A captured or streamed console frame.
+    /// </summary>
     public sealed class ConsoleFrame
     {
         public Guid VirtualMachineId { get; set; }
@@ -463,6 +551,9 @@ namespace HyperVConsoleKit
         public double TargetFramesPerSecond { get; set; }
     }
 
+    /// <summary>
+    /// A changed rectangular region in a tiled console frame update.
+    /// </summary>
     public sealed class ConsoleFrameTile
     {
         public int X { get; set; }
@@ -472,40 +563,174 @@ namespace HyperVConsoleKit
         public byte[] RawBytes { get; set; }
     }
 
+    /// <summary>
+    /// Active raw Hyper-V console session for capture, streaming, keyboard input, and mouse input.
+    /// </summary>
     public interface IHyperVConsoleSession : IDisposable
     {
+        /// <summary>
+        /// Raised for auditable actions performed through this session.
+        /// </summary>
         event EventHandler<HyperVConsoleAuditEvent> Activity;
+
+        /// <summary>
+        /// Gets the VM id this console session controls.
+        /// </summary>
         Guid VirtualMachineId { get; }
+
+        /// <summary>
+        /// Captures one raw console frame from Hyper-V.
+        /// </summary>
         ConsoleFrame CaptureFrame(ConsoleFrameOptions options);
+
+        /// <summary>
+        /// Captures one raw console frame from Hyper-V on a worker thread.
+        /// </summary>
         Task<ConsoleFrame> CaptureFrameAsync(ConsoleFrameOptions options, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Streams console frames until cancellation is requested or the frame callback fails.
+        /// </summary>
         Task StreamFramesAsync(ConsoleFrameStreamOptions options, Func<ConsoleFrame, CancellationToken, Task> onFrame, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends text through the Hyper-V virtual keyboard TypeText method.
+        /// </summary>
         void SendText(string text);
+
+        /// <summary>
+        /// Sends text asynchronously through the Hyper-V virtual keyboard TypeText method.
+        /// </summary>
         Task SendTextAsync(string text, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends a single key press and release.
+        /// </summary>
         void SendKey(ConsoleKeyCode key);
+
+        /// <summary>
+        /// Sends a single key press and release asynchronously.
+        /// </summary>
         Task SendKeyAsync(ConsoleKeyCode key, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends a key down event.
+        /// </summary>
         void SendKeyDown(ConsoleKeyCode key);
+
+        /// <summary>
+        /// Sends a key down event asynchronously.
+        /// </summary>
         Task SendKeyDownAsync(ConsoleKeyCode key, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends a key up event.
+        /// </summary>
         void SendKeyUp(ConsoleKeyCode key);
+
+        /// <summary>
+        /// Sends a key up event asynchronously.
+        /// </summary>
         Task SendKeyUpAsync(ConsoleKeyCode key, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends a key chord by pressing keys in order and releasing them in reverse order.
+        /// </summary>
         void SendChord(params ConsoleKeyCode[] keys);
+
+        /// <summary>
+        /// Sends a key chord asynchronously.
+        /// </summary>
         Task SendChordAsync(CancellationToken cancellationToken, params ConsoleKeyCode[] keys);
+
+        /// <summary>
+        /// Sends text as a sequence of keystrokes with optional delays and newline conversion.
+        /// </summary>
         void PasteTextAsKeystrokes(string text, ConsolePasteOptions options);
+
+        /// <summary>
+        /// Sends text as a sequence of keystrokes asynchronously.
+        /// </summary>
         Task PasteTextAsKeystrokesAsync(string text, ConsolePasteOptions options, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends raw keyboard scancodes through the Hyper-V virtual keyboard.
+        /// </summary>
         void SendScancodes(byte[] scancodes);
+
+        /// <summary>
+        /// Sends raw keyboard scancodes asynchronously.
+        /// </summary>
         Task SendScancodesAsync(byte[] scancodes, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends Ctrl+Alt+Del through the Hyper-V virtual keyboard.
+        /// </summary>
         void SendCtrlAltDel();
+
+        /// <summary>
+        /// Sends Ctrl+Alt+Del asynchronously.
+        /// </summary>
         Task SendCtrlAltDelAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends Alt+Tab.
+        /// </summary>
         void SendAltTab();
+
+        /// <summary>
+        /// Sends Alt+Tab asynchronously.
+        /// </summary>
         Task SendAltTabAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends Windows+R.
+        /// </summary>
         void SendWinR();
+
+        /// <summary>
+        /// Sends Windows+R asynchronously.
+        /// </summary>
         Task SendWinRAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Sends Ctrl+Shift+Esc.
+        /// </summary>
         void SendCtrlShiftEsc();
+
+        /// <summary>
+        /// Sends Ctrl+Shift+Esc asynchronously.
+        /// </summary>
         Task SendCtrlShiftEscAsync(CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Attempts to move the synthetic mouse to an absolute Hyper-V coordinate.
+        /// </summary>
         bool TrySendMouseMove(int x, int y);
+
+        /// <summary>
+        /// Attempts to move the synthetic mouse asynchronously.
+        /// </summary>
         Task<bool> TrySendMouseMoveAsync(int x, int y, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Attempts to move the mouse and click the specified button.
+        /// </summary>
         bool TrySendMouseClick(int x, int y, MouseButton button);
+
+        /// <summary>
+        /// Attempts to move the mouse and click asynchronously.
+        /// </summary>
         Task<bool> TrySendMouseClickAsync(int x, int y, MouseButton button, CancellationToken cancellationToken);
+
+        /// <summary>
+        /// Attempts to move the mouse and double-click the specified button.
+        /// </summary>
         bool TrySendMouseDoubleClick(int x, int y, MouseButton button);
+
+        /// <summary>
+        /// Attempts to move the mouse and double-click asynchronously.
+        /// </summary>
         Task<bool> TrySendMouseDoubleClickAsync(int x, int y, MouseButton button, CancellationToken cancellationToken);
     }
 }
