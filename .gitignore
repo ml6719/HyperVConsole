@@ -1,0 +1,9 @@
+bin/
+obj/
+*.user
+*.suo
+*.jpg
+*.jpeg
+*.png
+*.rgb565
+artifacts/

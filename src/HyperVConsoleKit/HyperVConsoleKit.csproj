@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFrameworks>net46;net8.0-windows</TargetFrameworks>
+    <RootNamespace>HyperVConsoleKit</RootNamespace>
+    <AssemblyName>HyperVConsoleKit</AssemblyName>
+    <PackageId>HyperVConsoleKit</PackageId>
+    <Version>0.1.0</Version>
+    <Authors>HyperVConsoleKit</Authors>
+    <Description>Host-side emergency Hyper-V VM console access toolkit.</Description>
+    <PackageTags>Hyper-V;WMI;console;virtualization</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryUrl>https://github.com/ml6719/HyperVConsole</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageProjectUrl>https://github.com/ml6719/HyperVConsole</PackageProjectUrl>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net46'">
+    <Reference Include="System.Management" />
+  </ItemGroup>
+
+  <ItemGroup Condition="'$(TargetFramework)' == 'net8.0-windows'">
+    <PackageReference Include="System.Management" Version="9.0.6" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\..\LICENSE" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+</Project>
