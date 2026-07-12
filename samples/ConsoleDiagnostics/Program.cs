@@ -42,6 +42,7 @@ Run("Capabilities", () =>
     Console.WriteLine($"  HostEnhancedSessionPolicy: {capabilities.HostEnhancedSessionPolicyEnabled}");
     Console.WriteLine($"  EnhancedTransport: {capabilities.EnhancedSessionTransportType}");
     Console.WriteLine($"  Recommended: {capabilities.RecommendedMode}");
+    Console.WriteLine($"  RecommendedFrameSize: {capabilities.RecommendedFrameWidth}x{capabilities.RecommendedFrameHeight}");
     foreach (var limitation in capabilities.Limitations)
     {
         Console.WriteLine($"  Limitation: {limitation}");
@@ -51,7 +52,7 @@ Run("Capabilities", () =>
 using var session = client.OpenConsole(vm.Id, new HyperVConsoleOpenOptions { Mode = HyperVConsoleMode.RawHostConsole });
 var currentCapabilities = client.GetConsoleCapabilities(vm.Id);
 
-Run("Capture 1024x768 RGB565", () =>
+Run("Capture recommended RGB565", () =>
 {
     if (!currentCapabilities.CanCaptureNow)
     {
@@ -59,8 +60,9 @@ Run("Capture 1024x768 RGB565", () =>
         return;
     }
 
-    var frame = session.CaptureFrame(new ConsoleFrameOptions { Width = 1024, Height = 768 });
-    Expect(frame.RawBytes.Length == 1024 * 768 * 2, $"expected {1024 * 768 * 2} bytes, got {frame.RawBytes.Length}");
+    var frame = session.CaptureFrame(new ConsoleFrameOptions());
+    Expect(frame.RawBytes.Length == frame.Width * frame.Height * 2, $"expected {frame.Width * frame.Height * 2} bytes, got {frame.RawBytes.Length}");
+    Console.WriteLine($"  Size: {frame.Width}x{frame.Height}");
     Console.WriteLine($"  Bytes: {frame.RawBytes.Length}");
     Console.WriteLine($"  PixelFormat: {frame.PixelFormat}");
 });
@@ -79,8 +81,6 @@ Run("Stream Rgb332 tile mode", () =>
     {
         session.StreamFramesAsync(new ConsoleFrameStreamOptions
         {
-            Width = 1024,
-            Height = 768,
             PixelFormat = ConsoleFramePixelFormat.Rgb332,
             SendChangedTilesOnly = true,
             ActiveFramesPerSecond = 5,

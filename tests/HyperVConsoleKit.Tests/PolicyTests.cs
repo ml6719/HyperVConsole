@@ -18,6 +18,18 @@ public sealed class PolicyTests
     }
 
     [Fact]
+    public void ApplyToFrameOptionsLeavesAutoResolutionUnset()
+    {
+        var policy = new HyperVConsolePolicy { MaxWidth = 800, MaxHeight = 600 };
+        var options = new ConsoleFrameOptions();
+
+        policy.ApplyTo(options);
+
+        Assert.Equal(0, options.Width);
+        Assert.Equal(0, options.Height);
+    }
+
+    [Fact]
     public void ApplyToStreamOptionsClampsPerformanceControls()
     {
         var policy = new HyperVConsolePolicy

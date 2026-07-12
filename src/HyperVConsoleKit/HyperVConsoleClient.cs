@@ -355,7 +355,9 @@ namespace HyperVConsoleKit
                 SupportsMouseInput = capabilities.SupportsMouseInput,
                 CanSendMouseInputNow = capabilities.CanSendMouseInputNow,
                 SupportsEnhancedSession = capabilities.SupportsEnhancedSession,
-                RecommendedConsoleMode = capabilities.RecommendedMode
+                RecommendedConsoleMode = capabilities.RecommendedMode,
+                RecommendedFrameWidth = capabilities.RecommendedFrameWidth,
+                RecommendedFrameHeight = capabilities.RecommendedFrameHeight
             };
         }
 
@@ -367,6 +369,7 @@ namespace HyperVConsoleKit
             var isRunning = stateValue == 2;
             var enhancedTransport = GetEnhancedSessionTransportType(vm);
             var hostEnhancedSessionEnabled = GetHostEnhancedSessionPolicy();
+            var recommendedFrameSize = GetRecommendedFrameSize(vm);
             bool hasSyntheticMouse;
             using (var mouse = GetFirstRelatedObject(vm, "Msvm_SyntheticMouse", "Msvm_SystemDevice", "PartComponent", "GroupComponent"))
             {
@@ -406,8 +409,63 @@ namespace HyperVConsoleKit
                 HostEnhancedSessionPolicyEnabled = hostEnhancedSessionEnabled,
                 EnhancedSessionTransportType = enhancedTransport,
                 RecommendedMode = supportsEnhanced ? HyperVConsoleMode.EnhancedSession : HyperVConsoleMode.RawHostConsole,
+                RecommendedFrameWidth = recommendedFrameSize == null ? (int?)null : recommendedFrameSize.Width,
+                RecommendedFrameHeight = recommendedFrameSize == null ? (int?)null : recommendedFrameSize.Height,
                 Limitations = limitations.ToArray()
             };
+        }
+
+        internal static ConsoleFrameSize GetRecommendedFrameSize(ManagementObject vm)
+        {
+            ConsoleFrameSize best = null;
+            using (var heads = vm.GetRelated("Msvm_VideoHead", "Msvm_SystemDevice", null, null, "PartComponent", "GroupComponent", false, null))
+            {
+                foreach (ManagementObject head in heads)
+                {
+                    using (head)
+                    {
+                        var width = GetPositiveInt(head, "CurrentHorizontalResolution");
+                        var height = GetPositiveInt(head, "CurrentVerticalResolution");
+                        if (!width.HasValue || !height.HasValue)
+                        {
+                            continue;
+                        }
+
+                        var enabledState = GetPositiveInt(head, "EnabledState") ?? 0;
+                        var bitsPerPixel = GetPositiveInt(head, "CurrentBitsPerPixel") ?? 0;
+                        var score = 0;
+                        if (enabledState == 2)
+                        {
+                            score += 1000000000;
+                        }
+
+                        if (bitsPerPixel > 0)
+                        {
+                            score += 100000000;
+                        }
+
+                        score += width.Value * height.Value;
+                        if (best == null || score > best.Score)
+                        {
+                            best = new ConsoleFrameSize(width.Value, height.Value, score);
+                        }
+                    }
+                }
+            }
+
+            return best;
+        }
+
+        private static int? GetPositiveInt(ManagementBaseObject source, string propertyName)
+        {
+            var value = source[propertyName];
+            if (value == null)
+            {
+                return null;
+            }
+
+            var converted = Convert.ToInt32(value);
+            return converted > 0 ? converted : (int?)null;
         }
 
         private HyperVEnhancedSessionTransportType GetEnhancedSessionTransportType(ManagementObject vm)
@@ -574,6 +632,21 @@ namespace HyperVConsoleKit
                 UserName = Environment.UserName
             };
         }
+
+    }
+
+    internal sealed class ConsoleFrameSize
+    {
+        public ConsoleFrameSize(int width, int height, int score)
+        {
+            Width = width;
+            Height = height;
+            Score = score;
+        }
+
+        public int Width { get; private set; }
+        public int Height { get; private set; }
+        public int Score { get; private set; }
     }
 
     internal sealed class HyperVConsoleSession : IHyperVConsoleSession
@@ -615,6 +688,7 @@ namespace HyperVConsoleKit
             }
 
             _policy.EnsureCaptureAllowed();
+            options = ResolveFrameOptions(options);
             _policy.ApplyTo(options);
             ValidateFrameOptions(options);
 
@@ -680,6 +754,7 @@ namespace HyperVConsoleKit
             }
 
             _policy.EnsureCaptureAllowed();
+            options = ResolveStreamOptions(options);
             _policy.ApplyTo(options);
             ValidateStreamOptions(options);
             if (options.DropFramesWhenBehind)
@@ -856,8 +931,14 @@ namespace HyperVConsoleKit
             }
             finally
             {
-                signal.Dispose();
-                await producer.ConfigureAwait(false);
+                try
+                {
+                    await producer.ConfigureAwait(false);
+                }
+                finally
+                {
+                    signal.Dispose();
+                }
             }
         }
 
@@ -1343,6 +1424,47 @@ namespace HyperVConsoleKit
             if (options.Height < 1 || options.Height > ushort.MaxValue)
             {
                 throw new ArgumentOutOfRangeException("options", "Height must be between 1 and 65535.");
+            }
+        }
+
+        private ConsoleFrameOptions ResolveFrameOptions(ConsoleFrameOptions options)
+        {
+            var width = options.Width;
+            var height = options.Height;
+            if (width > 0 && height > 0)
+            {
+                return options;
+            }
+
+            var recommended = GetRecommendedFrameSize();
+            return new ConsoleFrameOptions
+            {
+                Width = width > 0 ? width : recommended.Width,
+                Height = height > 0 ? height : recommended.Height
+            };
+        }
+
+        private ConsoleFrameStreamOptions ResolveStreamOptions(ConsoleFrameStreamOptions options)
+        {
+            if (options.Width > 0 && options.Height > 0)
+            {
+                return options;
+            }
+
+            var recommended = GetRecommendedFrameSize();
+            options.Width = options.Width > 0 ? options.Width : recommended.Width;
+            options.Height = options.Height > 0 ? options.Height : recommended.Height;
+            return options;
+        }
+
+        private ConsoleFrameSize GetRecommendedFrameSize()
+        {
+            lock (_wmiLock)
+            {
+                using (var vm = GetVirtualMachineObject())
+                {
+                    return HyperVConsoleClient.GetRecommendedFrameSize(vm) ?? new ConsoleFrameSize(1024, 768, 0);
+                }
             }
         }
 

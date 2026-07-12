@@ -223,6 +223,14 @@ namespace HyperVConsoleKit
         public bool CanSendMouseInputNow { get; set; }
         public bool SupportsEnhancedSession { get; set; }
         public HyperVConsoleMode RecommendedConsoleMode { get; set; }
+        /// <summary>
+        /// Width reported by the active Hyper-V video head, when available.
+        /// </summary>
+        public int? RecommendedFrameWidth { get; set; }
+        /// <summary>
+        /// Height reported by the active Hyper-V video head, when available.
+        /// </summary>
+        public int? RecommendedFrameHeight { get; set; }
     }
 
     /// <summary>
@@ -256,6 +264,14 @@ namespace HyperVConsoleKit
         public bool HostEnhancedSessionPolicyEnabled { get; set; }
         public HyperVEnhancedSessionTransportType EnhancedSessionTransportType { get; set; }
         public HyperVConsoleMode RecommendedMode { get; set; }
+        /// <summary>
+        /// Width reported by the active Hyper-V video head, when available.
+        /// </summary>
+        public int? RecommendedFrameWidth { get; set; }
+        /// <summary>
+        /// Height reported by the active Hyper-V video head, when available.
+        /// </summary>
+        public int? RecommendedFrameHeight { get; set; }
         public string[] Limitations { get; set; }
     }
 
@@ -451,19 +467,26 @@ namespace HyperVConsoleKit
     /// <summary>
     /// Options for a single console frame capture.
     /// </summary>
+    /// <remarks>
+    /// Leave Width and Height as 0 to request the VM's recommended video-head size, falling back to 1024x768 when unavailable.
+    /// </remarks>
     public sealed class ConsoleFrameOptions
     {
-        public int Width { get; set; } = 1024;
-        public int Height { get; set; } = 768;
+        public int Width { get; set; }
+        public int Height { get; set; }
     }
 
     /// <summary>
     /// Options for continuous console frame streaming.
     /// </summary>
+    /// <remarks>
+    /// Leave Width and Height as 0 to request the VM's recommended video-head size, falling back to 1024x768 when unavailable.
+    /// Presets set explicit dimensions.
+    /// </remarks>
     public sealed class ConsoleFrameStreamOptions
     {
-        public int Width { get; set; } = 1024;
-        public int Height { get; set; } = 768;
+        public int Width { get; set; }
+        public int Height { get; set; }
         public double FramesPerSecond { get; set; } = 5;
         public double IdleFramesPerSecond { get; set; } = 1;
         public double ActiveFramesPerSecond { get; set; } = 5;

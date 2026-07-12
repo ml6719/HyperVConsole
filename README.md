@@ -211,6 +211,7 @@ Console.WriteLine($"Mouse input:      {caps.SupportsMouseInput}");
 Console.WriteLine($"Can mouse now:    {caps.CanSendMouseInputNow}");
 Console.WriteLine($"Enhanced session: {caps.SupportsEnhancedSession}");
 Console.WriteLine($"Recommended mode: {caps.RecommendedMode}");
+Console.WriteLine($"Recommended size: {caps.RecommendedFrameWidth}x{caps.RecommendedFrameHeight}");
 
 foreach (var limitation in caps.Limitations)
 {
@@ -241,11 +242,7 @@ using var session = client.OpenConsole(vm.Id, new HyperVConsoleOpenOptions
     Mode = HyperVConsoleMode.RawHostConsole
 });
 
-var frame = session.CaptureFrame(new ConsoleFrameOptions
-{
-    Width = 1024,
-    Height = 768
-});
+var frame = session.CaptureFrame(new ConsoleFrameOptions());
 
 File.WriteAllBytes("console.rgb565", frame.RawBytes);
 
@@ -254,7 +251,17 @@ Console.WriteLine(frame.PixelFormat);
 Console.WriteLine($"{frame.RawBytes.Length} bytes");
 ```
 
-That file is raw RGB565. If you ask for `1024x768`, it will be:
+When `Width` and `Height` are left as `0`, HyperVConsoleKit asks Hyper-V for the active `Msvm_VideoHead` resolution and falls back to `1024x768` if Hyper-V does not report one. You can still request an explicit size:
+
+```csharp
+var frame = session.CaptureFrame(new ConsoleFrameOptions
+{
+    Width = 1024,
+    Height = 768
+});
+```
+
+The file is raw RGB565. If you ask for `1024x768`, it will be:
 
 ```text
 1024 * 768 * 2 = 1,572,864 bytes
@@ -320,8 +327,6 @@ using var cts = new CancellationTokenSource();
 await session.StreamFramesAsync(
     new ConsoleFrameStreamOptions
     {
-        Width = 1024,
-        Height = 768,
         PixelFormat = ConsoleFramePixelFormat.Rgb332,
         ActiveFramesPerSecond = 5,
         IdleFramesPerSecond = 1,
@@ -344,6 +349,8 @@ await session.StreamFramesAsync(
     },
     cts.Token);
 ```
+
+Leaving stream `Width` and `Height` as `0` uses the VM's recommended video-head resolution. Set them explicitly when you want a fixed transport size.
 
 Your callback is awaited. If `DropFramesWhenBehind` is `true`, HyperVConsoleKit uses latest-frame streaming internally: capture can keep moving while your sender is busy, and the sender receives the newest available frame instead of working through stale frames.
 
@@ -616,7 +623,7 @@ var vm = await client.GetVirtualMachineAsync(id, cancellationToken);
 using var session = client.OpenConsole(vm.Id);
 
 var frame = await session.CaptureFrameAsync(
-    new ConsoleFrameOptions { Width = 1024, Height = 768 },
+    new ConsoleFrameOptions(),
     cancellationToken);
 
 await session.SendTextAsync("Administrator", cancellationToken);

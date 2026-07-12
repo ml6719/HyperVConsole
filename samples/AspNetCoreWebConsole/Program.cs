@@ -157,18 +157,6 @@ app.Map("/ws/console/{id:guid}", async (Guid id, HttpContext context) =>
         fps = requestedFps;
     }
 
-    var width = 1024;
-    if (int.TryParse(context.Request.Query["width"], out var requestedWidth))
-    {
-        width = requestedWidth;
-    }
-
-    var height = 768;
-    if (int.TryParse(context.Request.Query["height"], out var requestedHeight))
-    {
-        height = requestedHeight;
-    }
-
     var preset = ConsoleStreamPreset.Custom;
     if (Enum.TryParse<ConsoleStreamPreset>(context.Request.Query["preset"], true, out var requestedPreset))
     {
@@ -179,10 +167,18 @@ app.Map("/ws/console/{id:guid}", async (Guid id, HttpContext context) =>
         ? new ConsoleFrameStreamOptions()
         : ConsoleFrameStreamOptions.CreatePreset(preset);
 
-    options.Width = width;
-    options.Height = height;
     options.ActiveFramesPerSecond = fps;
     options.FramesPerSecond = fps;
+
+    if (int.TryParse(context.Request.Query["width"], out var requestedWidth))
+    {
+        options.Width = requestedWidth;
+    }
+
+    if (int.TryParse(context.Request.Query["height"], out var requestedHeight))
+    {
+        options.Height = requestedHeight;
+    }
 
     if (double.TryParse(context.Request.Query["idleFps"], out var idleFps))
     {
@@ -552,8 +548,6 @@ static string GetHtml()
       selected = vm;
       [...list.children].forEach(child => child.setAttribute('aria-selected', child.textContent.includes(vm.id) ? 'true' : 'false'));
       if (socket) socket.close();
-      const width = canvas.width;
-      const height = canvas.height;
       const fps = document.getElementById('fps').value || '5';
       const idleFps = document.getElementById('idleFps').value || '1';
       const maxBps = document.getElementById('maxBps').value || '';
@@ -561,7 +555,7 @@ static string GetHtml()
       const preset = document.getElementById('preset').value;
       const tiles = document.getElementById('tiles').checked;
       const scheme = location.protocol === 'https:' ? 'wss' : 'ws';
-      const params = new URLSearchParams({ width, height, fps, idleFps, format, preset, tiles });
+      const params = new URLSearchParams({ fps, idleFps, format, preset, tiles });
       if (maxBps) params.set('maxBps', maxBps);
       if (apiKey) params.set('apiKey', apiKey);
       socket = new WebSocket(`${scheme}://${location.host}/ws/console/${vm.id}?${params}`);
@@ -629,6 +623,11 @@ static string GetHtml()
     }
 
     function drawFrame(frame) {
+      if (canvas.width !== frame.header.width || canvas.height !== frame.header.height) {
+        canvas.width = frame.header.width;
+        canvas.height = frame.header.height;
+      }
+
       if (frame.header.updateKind === 'FullFrame') {
         drawPixels(frame.payload, frame.header.pixelFormat, frame.header.width, frame.header.height, 0, 0);
         return;

@@ -13,13 +13,10 @@ var outputPath = args.Length >= 2 ? args[1] : Path.Combine(Environment.CurrentDi
 
 using (var session = client.OpenConsole(vm.Id))
 {
-    var frame = await session.CaptureFrameAsync(new ConsoleFrameOptions
-    {
-        Width = 1024,
-        Height = 768
-    }, CancellationToken.None);
+    var frame = await session.CaptureFrameAsync(new ConsoleFrameOptions(), CancellationToken.None);
 
     File.WriteAllBytes(outputPath, frame.RawBytes);
+    Console.WriteLine($"Captured {frame.Width}x{frame.Height} RGB565 frame.");
 }
 
 Console.WriteLine($"Captured raw RGB565 {vm.Name} frame to {outputPath}");
